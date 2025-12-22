@@ -1,3 +1,4 @@
 .idea/
 code python/barcode_camera/keys/
 /code python/barcode_camera/captures/
+!code\ python/barcode_camera/captures/.keep
