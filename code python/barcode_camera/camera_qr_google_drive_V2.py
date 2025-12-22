@@ -4,7 +4,7 @@ import threading
 import datetime
 import time
 import queue
-from typing import Optional
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -12,18 +12,6 @@ import qrcode
 from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import ttk
-
-from google.oauth2 import service_account
-from google.auth.transport.requests import Request
-
-# JSON="keys/client_secret.json"
-# scopes=["https://www.googleapis.com/auth/drive.file"]
-#
-# creds = service_account.Credentials.from_service_account_file(JSON, scopes=scopes)
-# print("service account:", creds.service_account_email)
-# creds.refresh(Request())   # <- c’est ici que tu verras invalid_grant si la clé est rejetée
-# print("TOKEN OK, expires:", creds.expiry)
-
 
 # =========================================================
 # CONFIG
@@ -34,31 +22,31 @@ PREVIEW_W = 640
 PREVIEW_H = 360
 
 CAM_INDEX = 0
-CAMERA_RESOLUTION = (1640, 1232)
+CAMERA_RESOLUTION = (1640, 1232)  # capture resolution
 FRAME_WIDTH, FRAME_HEIGHT = CAMERA_RESOLUTION
 
 # ---------- PNG OVERLAYS ----------
 PIC_DIR = "pic"
 FRAME_PNG = os.path.join(PIC_DIR, "frame.png")
-LOGO_PNG  = os.path.join(PIC_DIR, "logo.png")
+LOGO_PNG = os.path.join(PIC_DIR, "logo.png")
 
 LOGO_SCALE = 0.5
-LOGO_POS_X = 230      # None => bas-droite auto
-LOGO_POS_Y = 350      # None => bas-droite auto
+LOGO_POS_X = 230      # None => auto
+LOGO_POS_Y = 350      # None => auto
 LOGO_MARGIN_X = 20
 LOGO_MARGIN_Y = 20
 
 # ---------- FLIP ----------
 FLIP_PREVIEW = True
 FLIP_CAPTURE = True
-FLIP_MODE = "h"          # "h"=horizontal, "v"=vertical, "hv"=les deux
+FLIP_MODE = "h"        # "h"=horizontal, "v"=vertical, "hv"=both
 
 # ---------- UX CAPTURE ----------
 COUNTDOWN_SECONDS = 3
 FLASH_DURATION_S = 0.12
 FLASH_COLOR = "white"
 
-# ---------- DÉCLENCHEMENT PAR ROI ----------
+# ---------- ROI TRIGGER ----------
 ROI_W = 20
 ROI_H = 20
 ROI_X = 600
@@ -66,10 +54,10 @@ ROI_Y = 10
 
 BASELINE_SECONDS = 2.0
 TRIGGER_DIST_THRESHOLD = 50.0
-HOLD_SECONDS = 0.3
+HOLD_SECONDS = 2.0          # ✅ finger must stay this long
 COOLDOWN_SECONDS = 2.0
 
-# Désactive le ROI juste après l’envoi du QR
+# Disable ROI right after sending QR
 ROI_DISABLE_AFTER_CAPTURE_S = 10.0
 
 DRAW_ROI_RECT = True
@@ -81,22 +69,31 @@ QR_GAP = 10
 QR_ANIM_STEPS = 12
 QR_ANIM_DELAY_MS = 15
 
-# ---------- GOOGLE DRIVE (service account) ----------
+# ---------- GOOGLE DRIVE (OAuth "installed") ----------
+# Put your OAuth client JSON here (type: installed)
 BASIC_PATH = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
 sys.path.append(BASIC_PATH)
 
-KEYS_PATH = os.path.join(BASIC_PATH, 'keys')
-GOOGLE_SERVICE_ACCOUNT_JSON = os.path.join(KEYS_PATH, 'client_secret.json')
+KEYS_PATH = os.path.join(BASIC_PATH, "keys")
+OAUTH_CLIENT_JSON = os.path.join(KEYS_PATH, "oauth_client.json")
 
+# Token created automatically on first login (DO NOT COMMIT)
+TOKEN_JSON = os.path.join(KEYS_PATH, "token.json")
+
+# Optional: upload into a specific Drive folder (folder id)
 GOOGLE_DRIVE_FOLDER_ID = None
+
+# Make uploaded file public (anyone with link)
 GOOGLE_DRIVE_MAKE_PUBLIC = True
 
-ENABLE_URL_SHORTENER = False
-SHORTENER_BACKEND = "tinyurl"
+# Headless / no browser (Raspberry without desktop):
+# - False: opens browser (recommended on PC)
+# - True : prints a link + code in the terminal
+OAUTH_USE_CONSOLE = False
 
 
 # =========================================================
-# OUTILS: flip
+# Utils: flip
 # =========================================================
 def apply_flip(img_bgr, mode: str):
     if mode == "h":
@@ -109,7 +106,7 @@ def apply_flip(img_bgr, mode: str):
 
 
 # =========================================================
-# ÉTAPE 1) appliquer frame + logo sur l'image CAPTURE
+# Overlay helpers (frame + logo)
 # =========================================================
 def overlay_rgba(dst_bgr, src_rgba, x, y):
     if src_rgba is None:
@@ -168,19 +165,27 @@ def apply_frame_and_logo(frame_bgr):
 
 
 # =========================================================
-# GOOGLE DRIVE UPLOADER
+# Google Drive Uploader (OAuth installed app)
 # =========================================================
 class GoogleDriveUploaderOAuth:
     """
-    Upload vers Google Drive via OAuth "installed app" (compte Google perso).
-    1) utilise oauth_client.json (le fichier téléchargé "installed")
-    2) génère token.json au premier lancement (ouvre un navigateur)
+    Upload to Google Drive via OAuth (installed app).
+    Creates TOKEN_JSON after first login.
     """
 
-    def __init__(self, oauth_client_json: str, token_json: str = "token.json", folder_id: Optional[str] = None):
+    def __init__(
+        self,
+        oauth_client_json: str,
+        token_json: str,
+        folder_id: Optional[str] = None,
+        make_public: bool = False,
+        use_console_flow: bool = False,
+    ):
         self.oauth_client_json = oauth_client_json
         self.token_json = token_json
         self.folder_id = folder_id
+        self.make_public = make_public
+        self.use_console_flow = use_console_flow
 
         self._drive = None
         self._init_drive()
@@ -193,18 +198,22 @@ class GoogleDriveUploaderOAuth:
             from google_auth_oauthlib.flow import InstalledAppFlow
         except Exception as e:
             raise RuntimeError(
-                "Librairies Google manquantes. Installe:\n"
-                "  pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2\n"
-                f"Détail: {e}"
+                "Missing Google libraries. Install:\n"
+                "  pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib\n"
+                f"Details: {e}"
             )
 
         if not os.path.isfile(self.oauth_client_json):
-            raise FileNotFoundError(f"OAuth client JSON introuvable: {self.oauth_client_json}")
+            raise FileNotFoundError(f"OAuth client JSON not found: {self.oauth_client_json}")
 
+        # Scopes
         scopes = ["https://www.googleapis.com/auth/drive.file"]
+        if self.make_public:
+            # Needed to set permissions reliably
+            scopes.append("https://www.googleapis.com/auth/drive")
 
         creds = None
-        if os.path.exists(self.token_json):
+        if os.path.isfile(self.token_json):
             creds = Credentials.from_authorized_user_file(self.token_json, scopes=scopes)
 
         if not creds or not creds.valid:
@@ -212,7 +221,12 @@ class GoogleDriveUploaderOAuth:
                 creds.refresh(Request())
             else:
                 flow = InstalledAppFlow.from_client_secrets_file(self.oauth_client_json, scopes=scopes)
-                creds = flow.run_local_server(port=0)
+                if self.use_console_flow:
+                    creds = flow.run_console()
+                else:
+                    creds = flow.run_local_server(port=0)
+
+            os.makedirs(os.path.dirname(self.token_json), exist_ok=True)
             with open(self.token_json, "w", encoding="utf-8") as f:
                 f.write(creds.to_json())
 
@@ -227,71 +241,12 @@ class GoogleDriveUploaderOAuth:
             metadata["parents"] = [self.folder_id]
 
         media = MediaFileUpload(filepath, mimetype="image/jpeg", resumable=True)
-        created = self._drive.files().create(body=metadata, media_body=media, fields="id").execute()
-        file_id = created["id"]
+        created = self._drive.files().create(
+            body=metadata,
+            media_body=media,
+            fields="id,webViewLink"
+        ).execute()
 
-        # lien consultable
-        info = self._drive.files().get(fileId=file_id, fields="webViewLink").execute()
-        return info["webViewLink"]
-
-class GoogleDriveUploader:
-    def __init__(
-        self,
-        service_account_json: str,
-        folder_id: Optional[str] = None,
-        make_public: bool = True,
-        enable_shortener: bool = False,
-        shortener_backend: str = "tinyurl",
-    ):
-        self.service_account_json = service_account_json
-        self.folder_id = folder_id
-        self.make_public = make_public
-
-        self.enable_shortener = enable_shortener
-        self.shortener_backend = shortener_backend
-        self._shortener = None
-        self._drive = None
-
-        self._init_drive()
-        self._init_shortener()
-
-    def _init_drive(self):
-        try:
-            from google.oauth2 import service_account
-            from googleapiclient.discovery import build
-        except Exception as e:
-            raise RuntimeError(
-                "Librairies Google manquantes. Installe:\n"
-                "  pip install google-api-python-client google-auth-httplib2 google-auth\n"
-                f"Détail: {e}"
-            )
-
-        if not os.path.isfile(self.service_account_json):
-            raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
-
-        scopes = ["https://www.googleapis.com/auth/drive.file"]
-        creds = service_account.Credentials.from_service_account_file(self.service_account_json, scopes=scopes)
-        self._drive = build("drive", "v3", credentials=creds, cache_discovery=False)
-
-    def _init_shortener(self):
-        if not self.enable_shortener:
-            return
-        try:
-            import pyshorteners
-            self._shortener = pyshorteners.Shortener()
-        except Exception:
-            self._shortener = None
-
-    def upload_and_get_url(self, filepath: str) -> str:
-        from googleapiclient.http import MediaFileUpload
-
-        filename = os.path.basename(filepath)
-        metadata = {"name": filename}
-        if self.folder_id:
-            metadata["parents"] = [self.folder_id]
-
-        media = MediaFileUpload(filepath, mimetype="image/jpeg", resumable=True)
-        created = self._drive.files().create(body=metadata, media_body=media, fields="id").execute()
         file_id = created["id"]
 
         if self.make_public:
@@ -304,34 +259,24 @@ class GoogleDriveUploader:
             except Exception:
                 pass
 
-        info = self._drive.files().get(fileId=file_id, fields="webViewLink,webContentLink").execute()
-        url = info.get("webViewLink") or info.get("webContentLink") or f"https://drive.google.com/file/d/{file_id}/view"
-
-        if self._shortener is not None:
-            try:
-                short_fn = getattr(self._shortener, self.shortener_backend).short
-                url = short_fn(url)
-            except Exception:
-                pass
-
-        return url
+        return created.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
 
 
 class CaptureStorage:
-    def __init__(self, capture_dir: str, uploader: GoogleDriveUploader):
+    def __init__(self, capture_dir: str, uploader: GoogleDriveUploaderOAuth):
         self.capture_dir = capture_dir
         self.uploader = uploader
         os.makedirs(self.capture_dir, exist_ok=True)
 
-    def save_frame_and_upload(self, frame_bgr) -> tuple[str, str]:
-        # microseconds -> évite collisions et garantit une URL/QR par photo
+    def save_frame_and_upload(self, frame_bgr) -> Tuple[str, str]:
+        # microseconds => unique filename => unique QR per photo
         ts = datetime.datetime.now().strftime("%Y_%m_%d__%H_%M_%S__%f")
         filename = f"capture_{ts}.jpg"
         filepath = os.path.join(self.capture_dir, filename)
 
         ok = cv2.imwrite(filepath, frame_bgr)
         if not ok:
-            raise IOError(f"Impossible d'écrire l'image: {filepath}")
+            raise IOError(f"Failed to write image: {filepath}")
 
         url = self.uploader.upload_and_get_url(filepath)
         return filepath, url
@@ -341,7 +286,7 @@ class CaptureStorage:
 
 
 # =========================================================
-# URL -> QR code
+# URL -> QR
 # =========================================================
 def make_qr_image(url: str, size: int = 260) -> Image.Image:
     qr = qrcode.QRCode(border=1)
@@ -373,15 +318,21 @@ def get_roi_mean_bgr(preview_bgr, roi_x=ROI_X, roi_y=ROI_Y, roi_w=ROI_W, roi_h=R
 # =========================================================
 class CameraAppGUI:
     def __init__(self):
-        # Webcam
-        self.cap = cv2.VideoCapture(CAM_INDEX, cv2.CAP_DSHOW)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        if not self.cap.isOpened():
-            raise RuntimeError("Impossible d'ouvrir la webcam. Change CAM_INDEX (0/1/2).")
+        # Webcam (use 1 argument for compatibility across builds)
+        self.cap = cv2.VideoCapture(CAM_INDEX)
+        try:
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
 
+        if not self.cap.isOpened():
+            raise RuntimeError("Cannot open camera. Try CAM_INDEX 0/1/2.")
+
+        # Try set capture resolution (may be ignored by camera/driver)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
+        # State
         self._frame_lock = threading.Lock()
         self._capture_lock = threading.Lock()
         self._last_frame_bgr = None
@@ -395,7 +346,7 @@ class CameraAppGUI:
         self._flash_until = 0.0
         self._flash_color = FLASH_COLOR
 
-        # Baseline (pas de texte à l’écran)
+        # Baseline (silent)
         self._baseline_start = time.monotonic()
         self._baseline_samples = []
         self._baseline_mean = None
@@ -403,26 +354,26 @@ class CameraAppGUI:
         # Hold timer
         self._roi_active_since = None
 
-        # Cooldown / séquence
+        # Cooldown / capture
         self._cooldown_until = 0.0
         self._sequence_running = False
 
-        # disable ROI after capture
+        # Disable ROI after capture
         self._roi_disabled_until = 0.0
 
-        # Google uploader + storage
-        uploader = GoogleDriveUploader(
-            service_account_json=GOOGLE_SERVICE_ACCOUNT_JSON,
+        # Drive uploader + storage
+        uploader = GoogleDriveUploaderOAuth(
+            oauth_client_json=OAUTH_CLIENT_JSON,
+            token_json=TOKEN_JSON,
             folder_id=GOOGLE_DRIVE_FOLDER_ID,
             make_public=GOOGLE_DRIVE_MAKE_PUBLIC,
-            enable_shortener=ENABLE_URL_SHORTENER,
-            shortener_backend=SHORTENER_BACKEND,
+            use_console_flow=OAUTH_USE_CONSOLE,
         )
         self.storage = CaptureStorage(CAPTURE_DIR, uploader)
 
-        # Tkinter UI (sans lien, sans phrases ROI)
+        # Tk UI (no URL text, no ROI phrases)
         self.root = tk.Tk()
-        self.root.title("Camera → Drive → QR")
+        self.root.title("Camera → QR")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         main = ttk.Frame(self.root, padding=12)
@@ -466,7 +417,7 @@ class CameraAppGUI:
             pass
         self.root.after(25, self._process_ui_queue)
 
-    # ---------- QR strip helpers ----------
+    # ---------- QR strip ----------
     def _qr_target_centers(self):
         centers = []
         for i in range(QR_HISTORY):
@@ -479,7 +430,7 @@ class CameraAppGUI:
         self._qr_animating = True
 
         def step(k):
-            t = (k / steps)
+            t = (k / float(steps))
             _, cy = self._qr_target_centers()
             for idx, item in enumerate(self._qr_items):
                 x0 = start_positions[idx]
@@ -501,6 +452,8 @@ class CameraAppGUI:
         qr_tk = ImageTk.PhotoImage(qr_pil_img)
 
         centers, cy = self._qr_target_centers()
+
+        # new comes from left
         start_x_new = -QR_SIZE // 2
         new_id = self.qr_canvas.create_image(start_x_new, cy, image=qr_tk)
         self._qr_items.insert(0, {"id": new_id, "img": qr_tk})
@@ -557,18 +510,17 @@ class CameraAppGUI:
             now = time.monotonic()
             roi_mean = get_roi_mean_bgr(small)
 
-            # Baseline silencieuse
+            # Baseline (silent)
             if self._baseline_mean is None:
-                elapsed = now - self._baseline_start
                 self._baseline_samples.append(roi_mean)
-                if elapsed >= BASELINE_SECONDS:
+                if (now - self._baseline_start) >= BASELINE_SECONDS and len(self._baseline_samples) > 5:
                     arr = np.stack(self._baseline_samples, axis=0)
                     self._baseline_mean = arr.mean(axis=0)
             else:
                 roi_enabled = (
-                    (now >= self._cooldown_until) and
-                    (not self._sequence_running) and
-                    (now >= self._roi_disabled_until)
+                    (now >= self._cooldown_until)
+                    and (not self._sequence_running)
+                    and (now >= self._roi_disabled_until)
                 )
 
                 if not roi_enabled:
@@ -587,7 +539,7 @@ class CameraAppGUI:
                     else:
                         self._roi_active_since = None
 
-            # ROI rectangle: vert si actif, rouge si désactivé (toujours visible)
+            # ROI rectangle: green if active, red if disabled
             if DRAW_ROI_RECT:
                 roi_is_active = (
                     self._baseline_mean is not None
@@ -606,7 +558,7 @@ class CameraAppGUI:
             if now < self._flash_until:
                 small[:] = 0 if self._flash_color.lower() == "black" else 255
 
-            # countdown (uniquement sur l’image)
+            # countdown overlay (only on image)
             if self._countdown_text is not None:
                 text = str(self._countdown_text)
                 font = cv2.FONT_HERSHEY_SIMPLEX
@@ -666,16 +618,16 @@ class CameraAppGUI:
 
             frame = apply_frame_and_logo(frame)
 
-            local_path, url = self.storage.save_frame_and_upload(frame)
+            _, url = self.storage.save_frame_and_upload(frame)
             if not url:
                 return
 
             qr_img = make_qr_image(url, size=260)
 
-            # Désactive ROI après capture
+            # Disable ROI after capture
             self._roi_disabled_until = time.monotonic() + ROI_DISABLE_AFTER_CAPTURE_S
 
-            # Push QR dans l’historique
+            # Push QR to history
             self.ui(lambda: self.push_qr_to_history(qr_img))
 
         finally:
