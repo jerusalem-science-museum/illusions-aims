@@ -4,7 +4,11 @@ import threading
 import datetime
 import time
 import queue
-from typing import Optional, Tuple
+import logging
+import re
+import tempfile
+from typing import Optional, Tuple, List
+
 import cv2
 import numpy as np
 import qrcode
@@ -12,22 +16,34 @@ from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import ttk
 
+from google.oauth2 import service_account
+
+
 # =========================================================
 # CONFIG
 # =========================================================
-CAPTURE_DIR = "captures"
 
+# ---------- Preview ----------
 PREVIEW_W = 640
 PREVIEW_H = 360
 
+# Sur Raspberry Pi, 30 fps Tkinter + PIL = souvent trop. 15 fps = plus fluide.
+PREVIEW_FPS = 15
+PREVIEW_INTERVAL_MS = int(1000 / PREVIEW_FPS)
+
+# ---------- Camera ----------
 CAM_INDEX = 0
-CAMERA_RESOLUTION = (1640, 1232)
+# CAMERA_RESOLUTION = (1640, 1232)
+CAMERA_RESOLUTION = (1280, 720)
+# CAMERA_RESOLUTION = (640, 480)
 FRAME_WIDTH, FRAME_HEIGHT = CAMERA_RESOLUTION
 
 # ---------- PNG OVERLAYS ----------
-PIC_DIR = "pic"
+# IMPORTANT: chemins absolus pour éviter les surprises si tu lances depuis un autre dossier.
+THIS_DIR = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
+PIC_DIR = os.path.join(THIS_DIR, "pic")
 FRAME_PNG = os.path.join(PIC_DIR, "frame.png")
-LOGO_PNG = os.path.join(PIC_DIR, "logo.png")
+LOGO_PNG  = os.path.join(PIC_DIR, "logo.png")
 
 LOGO_SCALE = 0.5
 LOGO_POS_X = 230      # None => bas-droite auto
@@ -38,14 +54,14 @@ LOGO_MARGIN_Y = 20
 # ---------- FLIP ----------
 FLIP_PREVIEW = True
 FLIP_CAPTURE = True
-FLIP_MODE = "h"        # "h"=horizontal, "v"=vertical, "hv"=les deux
+FLIP_MODE = "h"          # "h"=horizontal, "v"=vertical, "hv"=les deux
 
 # ---------- UX CAPTURE ----------
 COUNTDOWN_SECONDS = 3
 FLASH_DURATION_S = 0.12
 FLASH_COLOR = "white"
 
-# ---------- ROI ----------
+# ---------- ROI déclenchement ----------
 ROI_W = 20
 ROI_H = 20
 ROI_X = 600
@@ -67,7 +83,7 @@ QR_ANIM_STEPS = 12
 QR_ANIM_DELAY_MS = 15
 
 # ---------- GOOGLE DRIVE (service account) ----------
-BASIC_PATH = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
+BASIC_PATH = THIS_DIR
 sys.path.append(BASIC_PATH)
 
 KEYS_PATH = os.path.join(BASIC_PATH, "keys")
@@ -79,25 +95,87 @@ GOOGLE_DRIVE_MAKE_PUBLIC = True
 ENABLE_URL_SHORTENER = False
 SHORTENER_BACKEND = "tinyurl"
 
+# ---------- LOGGING ----------
+LOG_LEVEL = "INFO"          # "DEBUG" / "INFO" / "WARNING" / "ERROR"
+LOG_FILE = None             # ex: "camera_qr.log" (None => console only)
+
+# ---------- GOOGLE SHEETS (optional log) ----------
+ENABLE_SHEETS_LOG = True
+GOOGLE_SHEETS_SPREADSHEET_ID = None   # ex: "1AbC..." (entre /d/ et /edit dans l'URL)
+GOOGLE_SHEETS_SPREADSHEET_ID_FILE = os.path.join(KEYS_PATH, "sheet_id.txt")  # 1ère ligne = ID ou URL
+GOOGLE_SHEETS_WORKSHEET_NAME = "pi04"
+
+# Si False: on ne log PAS les évènements QR_OK / QR_ERROR dans Google Sheets
+SHEETS_LOG_QR_EVENTS = False
+
 
 # =========================================================
-# CAMERA OPEN (RPI4 compatible)
+# Helpers (Sheet ID, logging)
+# =========================================================
+def _read_first_nonempty_line(path: str) -> str:
+    """Return first non-empty, non-comment line from a txt file. Empty string if missing."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                return s
+    except FileNotFoundError:
+        return ""
+    except Exception:
+        return ""
+    return ""
+
+
+def extract_spreadsheet_id(value: str) -> str:
+    """Accepts either a raw Spreadsheet ID or a full Google Sheets URL and returns the ID."""
+    if not value:
+        return ""
+    v = value.strip()
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", v)
+    if m:
+        return m.group(1)
+    return v
+
+
+def setup_logging():
+    """Configure les logs console (et optionnellement fichier)."""
+    level = getattr(logging, str(LOG_LEVEL).upper(), logging.INFO)
+
+    handlers = [logging.StreamHandler()]
+    if LOG_FILE:
+        try:
+            from logging.handlers import RotatingFileHandler
+            handlers.append(
+                RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+            )
+        except Exception:
+            pass
+
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+
+
+# =========================================================
+# CAMERA OPEN (RPI compatible)
 # =========================================================
 def open_camera(cam_index: int):
-    # 1) Essai avec backend (OpenCV récent)
     try:
         cap = cv2.VideoCapture(cam_index, cv2.CAP_V4L2)
         if cap is not None and cap.isOpened():
             return cap
     except TypeError:
-        pass  # ton cas: VideoCapture() n'accepte qu'1 argument
+        pass
 
-    # 2) Essai classique (compatible partout)
     cap = cv2.VideoCapture(cam_index)
     if cap is not None and cap.isOpened():
         return cap
 
-    # 3) Essai avec chemin device (/dev/videoX)
     cap = cv2.VideoCapture(f"/dev/video{cam_index}")
     if cap is not None and cap.isOpened():
         return cap
@@ -105,26 +183,23 @@ def open_camera(cam_index: int):
     raise RuntimeError(f"Impossible d'ouvrir la caméra index={cam_index} (essais: index, V4L2, /dev/videoX)")
 
 
-
 def _configure_capture(cap: cv2.VideoCapture):
-    # buffersize peut ne pas exister sur certains backends -> try
+    # Important pour réduire la latence
     try:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     except Exception:
         pass
 
-    # résolution
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
-    # Tentative MJPG (souvent + fluide sur Pi avec USB cam)
+    # USB cam: MJPG aide souvent (sinon ignore)
     try:
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
         cap.set(cv2.CAP_PROP_FOURCC, fourcc)
     except Exception:
         pass
 
-    # FPS (si supporté)
     try:
         cap.set(cv2.CAP_PROP_FPS, 30)
     except Exception:
@@ -132,7 +207,7 @@ def _configure_capture(cap: cv2.VideoCapture):
 
 
 # =========================================================
-# OUTILS: flip
+# OUTILS image
 # =========================================================
 def apply_flip(img_bgr, mode: str):
     if mode == "h":
@@ -144,16 +219,12 @@ def apply_flip(img_bgr, mode: str):
     return img_bgr
 
 
-# =========================================================
-# OVERLAYS
-# =========================================================
 def overlay_rgba(dst_bgr, src_rgba, x, y):
     if src_rgba is None:
         return dst_bgr
 
     h, w = src_rgba.shape[:2]
     H, W = dst_bgr.shape[:2]
-
     if x >= W or y >= H or x + w <= 0 or y + h <= 0:
         return dst_bgr
 
@@ -180,31 +251,47 @@ def overlay_rgba(dst_bgr, src_rgba, x, y):
     return dst_bgr
 
 
-def apply_frame_and_logo(frame_bgr):
-    H, W = frame_bgr.shape[:2]
+class OverlayCache:
+    """Charge/resize les PNG UNE SEULE FOIS (gros gain vs cv2.imread à chaque capture)."""
+    def __init__(self, out_w: int, out_h: int):
+        self.out_w = out_w
+        self.out_h = out_h
 
-    frame_rgba = cv2.imread(FRAME_PNG, cv2.IMREAD_UNCHANGED)
-    if frame_rgba is not None:
-        frame_rgba = cv2.resize(frame_rgba, (W, H), interpolation=cv2.INTER_AREA)
-        frame_bgr = overlay_rgba(frame_bgr, frame_rgba, 0, 0)
+        self.frame_rgba = None
+        self.logo_rgba = None
+        self.logo_x = 0
+        self.logo_y = 0
 
-    logo_rgba = cv2.imread(LOGO_PNG, cv2.IMREAD_UNCHANGED)
-    if logo_rgba is not None:
-        target_w = max(1, int(W * LOGO_SCALE))
-        ratio = target_w / max(1, logo_rgba.shape[1])
-        target_h = max(1, int(logo_rgba.shape[0] * ratio))
-        logo_rgba = cv2.resize(logo_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
+        self._load()
 
-        x = (W - target_w - LOGO_MARGIN_X) if LOGO_POS_X is None else int(LOGO_POS_X)
-        y = (H - target_h - LOGO_MARGIN_Y) if LOGO_POS_Y is None else int(LOGO_POS_Y)
+    def _load(self):
+        fr = cv2.imread(FRAME_PNG, cv2.IMREAD_UNCHANGED)
+        if fr is not None:
+            self.frame_rgba = cv2.resize(fr, (self.out_w, self.out_h), interpolation=cv2.INTER_AREA)
 
-        frame_bgr = overlay_rgba(frame_bgr, logo_rgba, x, y)
+        lg = cv2.imread(LOGO_PNG, cv2.IMREAD_UNCHANGED)
+        if lg is not None:
+            target_w = max(1, int(self.out_w * LOGO_SCALE))
+            ratio = target_w / max(1, lg.shape[1])
+            target_h = max(1, int(lg.shape[0] * ratio))
+            self.logo_rgba = cv2.resize(lg, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
+            x = (self.out_w - target_w - LOGO_MARGIN_X) if LOGO_POS_X is None else int(LOGO_POS_X)
+            y = (self.out_h - target_h - LOGO_MARGIN_Y) if LOGO_POS_Y is None else int(LOGO_POS_Y)
+            self.logo_x = x
+            self.logo_y = y
+
+
+def apply_frame_and_logo_cached(frame_bgr, overlays: OverlayCache):
+    if overlays.frame_rgba is not None:
+        frame_bgr = overlay_rgba(frame_bgr, overlays.frame_rgba, 0, 0)
+    if overlays.logo_rgba is not None:
+        frame_bgr = overlay_rgba(frame_bgr, overlays.logo_rgba, overlays.logo_x, overlays.logo_y)
     return frame_bgr
 
 
 # =========================================================
-# GOOGLE DRIVE
+# GOOGLE DRIVE UPLOADER
 # =========================================================
 class GoogleDriveUploader:
     def __init__(
@@ -229,7 +316,6 @@ class GoogleDriveUploader:
 
     def _init_drive(self):
         try:
-            from google.oauth2 import service_account
             from googleapiclient.discovery import build
         except Exception as e:
             raise RuntimeError(
@@ -289,30 +375,133 @@ class GoogleDriveUploader:
         return url
 
 
+# =========================================================
+# GOOGLE SHEETS LOGGER
+# =========================================================
+class GoogleSheetsLogger:
+    """Petit logger Google Sheets (append une ligne par évènement)."""
+
+    def __init__(self, service_account_json: str, spreadsheet_id: str, worksheet_name: str = "logs"):
+        self.service_account_json = service_account_json
+        self.spreadsheet_id = extract_spreadsheet_id(spreadsheet_id)
+        self.worksheet_name = (worksheet_name or "logs").strip()
+        self._svc = None
+        self._init_sheets()
+
+    def _a1_range(self) -> str:
+        title = self.worksheet_name
+        if any(ch in title for ch in [" ", "!", ":", "'"]):
+            title = title.replace("'", "''")
+            return f"'{title}'!A1"
+        return f"{title}!A1"
+
+    def _init_sheets(self):
+        try:
+            from googleapiclient.discovery import build
+        except Exception as e:
+            raise RuntimeError(
+                "Librairies Google manquantes pour Sheets. Installe:\n"
+                "  pip install google-api-python-client google-auth-httplib2 google-auth\n"
+                f"Détail: {e}"
+            )
+
+        if not os.path.isfile(self.service_account_json):
+            raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+
+        if not self.spreadsheet_id:
+            raise ValueError("Spreadsheet ID vide. Mets uniquement l'ID (entre /d/ et /edit).")
+
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = service_account.Credentials.from_service_account_file(self.service_account_json, scopes=scopes)
+        self._svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        self._ensure_worksheet_exists()
+
+    def _ensure_worksheet_exists(self):
+        from googleapiclient.errors import HttpError
+
+        try:
+            meta = self._svc.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
+            sheets = meta.get("sheets", []) or []
+            titles = {s.get("properties", {}).get("title") for s in sheets}
+            if self.worksheet_name not in titles:
+                req = {"requests": [{"addSheet": {"properties": {"title": self.worksheet_name}}}]}
+                self._svc.spreadsheets().batchUpdate(spreadsheetId=self.spreadsheet_id, body=req).execute()
+        except HttpError as e:
+            detail = ""
+            try:
+                detail = e.content.decode("utf-8", errors="ignore")
+            except Exception:
+                detail = str(e)
+            raise RuntimeError(
+                "Google Sheets: impossible de lire/créer l'onglet. Vérifie:\n"
+                "- Spreadsheet ID correct (pas l'URL)\n"
+                "- le Sheet est partagé avec l'email du service account (Editor)\n"
+                "- Google Sheets API activée dans Google Cloud\n"
+                f"\nDétail HTTP: {detail}"
+            ) from e
+
+    def append_row(self, values: List):
+        from googleapiclient.errors import HttpError
+
+        body = {"values": [values]}
+        rng = self._a1_range()
+        try:
+            self._svc.spreadsheets().values().append(
+                spreadsheetId=self.spreadsheet_id,
+                range=rng,
+                valueInputOption="USER_ENTERED",
+                insertDataOption="INSERT_ROWS",
+                body=body,
+            ).execute()
+        except HttpError as e:
+            detail = ""
+            try:
+                detail = e.content.decode("utf-8", errors="ignore")
+            except Exception:
+                detail = str(e)
+            raise RuntimeError(
+                f"Google Sheets append error (range={rng}). "
+                f"Vérifie que l'onglet existe et que le nom est exact. Détail HTTP: {detail}"
+            ) from e
+
+
+# =========================================================
+# CAPTURE STORAGE (temp file only)
+# =========================================================
 class CaptureStorage:
-    def __init__(self, capture_dir: str, uploader: GoogleDriveUploader):
-        self.capture_dir = capture_dir
+    """Capture une frame, l'upload sur Drive, puis supprime le fichier local.
+
+    Note: MediaFileUpload attend un chemin local => on crée un fichier temporaire et on le supprime.
+    """
+
+    def __init__(self, uploader: GoogleDriveUploader):
         self.uploader = uploader
-        os.makedirs(self.capture_dir, exist_ok=True)
 
     def save_frame_and_upload(self, frame_bgr) -> Tuple[str, str]:
         ts = datetime.datetime.now().strftime("%Y_%m_%d__%H_%M_%S__%f")
         filename = f"capture_{ts}.jpg"
-        filepath = os.path.join(self.capture_dir, filename)
+        tmp_path = os.path.join(tempfile.gettempdir(), filename)
 
-        ok = cv2.imwrite(filepath, frame_bgr)
+        ok = cv2.imwrite(tmp_path, frame_bgr)
         if not ok:
-            raise IOError(f"Impossible d'écrire l'image: {filepath}")
+            raise IOError(f"Impossible d'écrire l'image temporaire: {tmp_path}")
 
-        url = self.uploader.upload_and_get_url(filepath)
-        return filepath, url
+        try:
+            url = self.uploader.upload_and_get_url(tmp_path)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+        return filename, url
 
     def close(self):
         pass
 
 
 # =========================================================
-# QR + ROI mean
+# URL -> QR
 # =========================================================
 def make_qr_image(url: str, size: int = 260) -> Image.Image:
     qr = qrcode.QRCode(border=1)
@@ -322,6 +511,9 @@ def make_qr_image(url: str, size: int = 260) -> Image.Image:
     return img.resize((size, size))
 
 
+# =========================================================
+# ROI mean
+# =========================================================
 def get_roi_mean_bgr(preview_bgr, roi_x=ROI_X, roi_y=ROI_Y, roi_w=ROI_W, roi_h=ROI_H) -> np.ndarray:
     H, W = preview_bgr.shape[:2]
     x1 = max(0, min(W - 1, int(roi_x)))
@@ -337,16 +529,53 @@ def get_roi_mean_bgr(preview_bgr, roi_x=ROI_X, roi_y=ROI_Y, roi_w=ROI_W, roi_h=R
 
 
 # =========================================================
+# CAMERA THREAD (fluidité)
+# =========================================================
+class FrameGrabber(threading.Thread):
+    """Lit la caméra en continu et garde uniquement la dernière frame (réduit la latence)."""
+    def __init__(self, cap: cv2.VideoCapture):
+        super().__init__(daemon=True)
+        self.cap = cap
+        self.lock = threading.Lock()
+        self.running = True
+        self.last = None
+
+    def run(self):
+        while self.running:
+            ok, frame = self.cap.read()
+            if ok and frame is not None:
+                with self.lock:
+                    self.last = frame
+            else:
+                time.sleep(0.01)
+
+    def get_latest(self):
+        with self.lock:
+            if self.last is None:
+                return None
+            return self.last.copy()
+
+    def stop(self):
+        self.running = False
+
+
+# =========================================================
 # APP
 # =========================================================
 class CameraAppGUI:
     def __init__(self):
-        # Webcam (RPI4)
+        self._logger = logging.getLogger("camera_qr_google_drive")
+        cv2.setUseOptimized(True)
+
+        # Cam + thread grabber (fluidité)
         self.cap = open_camera(CAM_INDEX)
+        _configure_capture(self.cap)
+
+        self.grabber = FrameGrabber(self.cap)
+        self.grabber.start()
 
         self._frame_lock = threading.Lock()
         self._capture_lock = threading.Lock()
-        self._last_frame_bgr = None
         self._running = True
 
         self._uiq = queue.Queue()
@@ -364,17 +593,55 @@ class CameraAppGUI:
         self._sequence_running = False
         self._roi_disabled_until = 0.0
 
-        uploader = GoogleDriveUploader(
-            service_account_json=GOOGLE_SERVICE_ACCOUNT_JSON,
-            folder_id=GOOGLE_DRIVE_FOLDER_ID,
-            make_public=GOOGLE_DRIVE_MAKE_PUBLIC,
-            enable_shortener=ENABLE_URL_SHORTENER,
-            shortener_backend=SHORTENER_BACKEND,
-        )
-        self.storage = CaptureStorage(CAPTURE_DIR, uploader)
+        # Cache overlays (une fois)
+        self.overlays = OverlayCache(FRAME_WIDTH, FRAME_HEIGHT)
 
-        # UI (silencieuse)
+        # Google Drive uploader + storage (avec logs d'erreur au démarrage)
+        self.storage = None
+        try:
+            uploader = GoogleDriveUploader(
+                service_account_json=GOOGLE_SERVICE_ACCOUNT_JSON,
+                folder_id=GOOGLE_DRIVE_FOLDER_ID,
+                make_public=GOOGLE_DRIVE_MAKE_PUBLIC,
+                enable_shortener=ENABLE_URL_SHORTENER,
+                shortener_backend=SHORTENER_BACKEND,
+            )
+            self.storage = CaptureStorage(uploader)
+            self._logger.info("Google Drive uploader initialisé.")
+        except Exception:
+            self._logger.exception("Google Drive init failed")
+            self.storage = None
+
+        # Google Sheets logger (optionnel)
+        self.sheets_logger = None
+        if ENABLE_SHEETS_LOG:
+            sheet_id = GOOGLE_SHEETS_SPREADSHEET_ID
+            if not sheet_id:
+                sheet_id = _read_first_nonempty_line(GOOGLE_SHEETS_SPREADSHEET_ID_FILE)
+                if sheet_id:
+                    self._logger.info("Spreadsheet ID lu depuis %s", GOOGLE_SHEETS_SPREADSHEET_ID_FILE)
+
+            sheet_id = extract_spreadsheet_id(sheet_id)
+            if sheet_id:
+                try:
+                    self.sheets_logger = GoogleSheetsLogger(
+                        service_account_json=GOOGLE_SERVICE_ACCOUNT_JSON,
+                        spreadsheet_id=sheet_id,
+                        worksheet_name=GOOGLE_SHEETS_WORKSHEET_NAME,
+                    )
+                    self._logger.info("Google Sheets logger initialisé (onglet=%s).", GOOGLE_SHEETS_WORKSHEET_NAME)
+                except Exception:
+                    self._logger.exception("Google Sheets init failed")
+                    self.sheets_logger = None
+            else:
+                self._logger.warning(
+                    "Google Sheets log activé mais aucun Sheet ID trouvé (ni GOOGLE_SHEETS_SPREADSHEET_ID ni %s).",
+                    GOOGLE_SHEETS_SPREADSHEET_ID_FILE,
+                )
+
+        # UI Tkinter
         self.root = tk.Tk()
+        self._logger.info("Tkinter root créé, ouverture de la fenêtre...")
         self.root.title("Camera → Drive → QR")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -384,6 +651,7 @@ class CameraAppGUI:
         self.preview_label = ttk.Label(main)
         self.preview_label.pack(pady=(0, 10))
 
+        # QR strip
         self.qr_canvas_w = QR_HISTORY * QR_SIZE + (QR_HISTORY + 1) * QR_GAP
         self.qr_canvas_h = QR_SIZE + 2 * QR_GAP
         self.qr_canvas = tk.Canvas(main, width=self.qr_canvas_w, height=self.qr_canvas_h, highlightthickness=0)
@@ -396,6 +664,7 @@ class CameraAppGUI:
         self.root.after(10, self.update_preview)
         self.root.after(25, self._process_ui_queue)
 
+    # ---------- UI queue ----------
     def ui(self, fn):
         self._uiq.put(fn)
 
@@ -413,7 +682,7 @@ class CameraAppGUI:
             pass
         self.root.after(25, self._process_ui_queue)
 
-    # QR strip
+    # ---------- QR strip helpers ----------
     def _qr_target_centers(self):
         centers = []
         for i in range(QR_HISTORY):
@@ -486,33 +755,33 @@ class CameraAppGUI:
 
         self._animate_qr_to_targets(start_positions, target_positions, on_done=cleanup)
 
+    # ---------- Preview loop ----------
     def update_preview(self):
         if not self._running:
             return
 
-        ok, frame = self.cap.read()
-        if ok and frame is not None:
-            with self._frame_lock:
-                self._last_frame_bgr = frame
-
+        frame = self.grabber.get_latest()
+        if frame is not None:
             small = cv2.resize(frame, (PREVIEW_W, PREVIEW_H), interpolation=cv2.INTER_AREA)
+
             if FLIP_PREVIEW:
                 small = apply_flip(small, FLIP_MODE)
 
             now = time.monotonic()
             roi_mean = get_roi_mean_bgr(small)
 
-            # baseline silencieuse
+            # Baseline silencieuse
             if self._baseline_mean is None:
+                elapsed = now - self._baseline_start
                 self._baseline_samples.append(roi_mean)
-                if (now - self._baseline_start) >= BASELINE_SECONDS:
+                if elapsed >= BASELINE_SECONDS:
                     arr = np.stack(self._baseline_samples, axis=0)
                     self._baseline_mean = arr.mean(axis=0)
             else:
                 roi_enabled = (
-                    now >= self._cooldown_until
-                    and not self._sequence_running
-                    and now >= self._roi_disabled_until
+                    (now >= self._cooldown_until) and
+                    (not self._sequence_running) and
+                    (now >= self._roi_disabled_until)
                 )
 
                 if not roi_enabled:
@@ -522,14 +791,16 @@ class CameraAppGUI:
                     if dist >= TRIGGER_DIST_THRESHOLD:
                         if self._roi_active_since is None:
                             self._roi_active_since = now
-                        if (now - self._roi_active_since) >= HOLD_SECONDS:
+
+                        held = now - self._roi_active_since
+                        if held >= HOLD_SECONDS:
                             self._roi_active_since = None
                             self._cooldown_until = now + COOLDOWN_SECONDS
                             self.start_countdown_then_capture(COUNTDOWN_SECONDS)
                     else:
                         self._roi_active_since = None
 
-            # ROI rectangle
+            # ROI rectangle: vert si actif, rouge si désactivé (toujours visible)
             if DRAW_ROI_RECT:
                 roi_is_active = (
                     self._baseline_mean is not None
@@ -548,7 +819,7 @@ class CameraAppGUI:
             if now < self._flash_until:
                 small[:] = 0 if self._flash_color.lower() == "black" else 255
 
-            # countdown
+            # countdown (uniquement sur l’image)
             if self._countdown_text is not None:
                 text = str(self._countdown_text)
                 font = cv2.FONT_HERSHEY_SIMPLEX
@@ -565,8 +836,9 @@ class CameraAppGUI:
             self._tk_preview_img = ImageTk.PhotoImage(pil)
             self.preview_label.configure(image=self._tk_preview_img)
 
-        self.root.after(33, self.update_preview)
+        self.root.after(PREVIEW_INTERVAL_MS, self.update_preview)
 
+    # ---------- countdown + flash + capture ----------
     def start_countdown_then_capture(self, seconds: int = 3):
         if self._sequence_running:
             return
@@ -595,23 +867,56 @@ class CameraAppGUI:
         self.root.after(seconds * 1000, do_flash)
         self.root.after(int(seconds * 1000 + FLASH_DURATION_S * 1000), start_capture_thread)
 
+    def _sheets_log_safe(self, row: List):
+        if self.sheets_logger is None:
+            return
+        try:
+            self.sheets_logger.append_row(row)
+        except Exception:
+            self._logger.exception("Sheets append_row failed")
+
     def capture_flow(self):
         try:
-            with self._frame_lock:
-                frame = None if self._last_frame_bgr is None else self._last_frame_bgr.copy()
+            frame = self.grabber.get_latest()
             if frame is None:
                 return
 
             if FLIP_CAPTURE:
                 frame = apply_flip(frame, FLIP_MODE)
 
-            frame = apply_frame_and_logo(frame)
+            frame = apply_frame_and_logo_cached(frame, self.overlays)
 
-            _, url = self.storage.save_frame_and_upload(frame)
-            if not url:
+            if self.storage is None:
+                self._logger.error("Capture demandée mais Google Drive n'est pas initialisé (storage=None).")
+                self._sheets_log_safe([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "DRIVE_NOT_READY", "", "", ""])
                 return
 
-            qr_img = make_qr_image(url, size=260)
+            try:
+                filename, url = self.storage.save_frame_and_upload(frame)
+            except Exception:
+                self._logger.exception("Upload vers Drive a échoué")
+                self._sheets_log_safe([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "UPLOAD_ERROR", "", "", "exception"])
+                return
+
+            if not url:
+                self._logger.error("Upload OK mais URL vide (url='').")
+                self._sheets_log_safe([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "URL_EMPTY", filename, "", ""])
+                return
+
+            self._logger.info("URL reçue: %s", url)
+            self._sheets_log_safe([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "UPLOAD_OK", filename, url, ""])
+
+            try:
+                qr_img = make_qr_image(url, size=260)
+            except Exception:
+                self._logger.exception("Conversion URL -> QR a échoué")
+                if SHEETS_LOG_QR_EVENTS:
+                    self._sheets_log_safe([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "QR_ERROR", filename, url, "exception"])
+                return
+
+            self._logger.info("QR généré (URL -> QR) et prêt à être affiché.")
+            if SHEETS_LOG_QR_EVENTS:
+                self._sheets_log_safe([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "QR_OK", filename, url, ""])
 
             self._roi_disabled_until = time.monotonic() + ROI_DISABLE_AFTER_CAPTURE_S
             self.ui(lambda: self.push_qr_to_history(qr_img))
@@ -626,6 +931,10 @@ class CameraAppGUI:
     def on_close(self):
         self._running = False
         try:
+            self.grabber.stop()
+        except Exception:
+            pass
+        try:
             self.cap.release()
         except Exception:
             pass
@@ -639,8 +948,12 @@ class CameraAppGUI:
             pass
 
     def run(self):
+        self._logger.info("Entrée dans mainloop (la fenêtre doit rester ouverte).")
         self.root.mainloop()
+        self._logger.info("Sortie de mainloop (fenêtre fermée).")
 
 
 if __name__ == "__main__":
+    setup_logging()
+    logging.getLogger("camera_qr_google_drive").info("Démarrage de l'application Camera → Drive → QR (Raspberry V2 + logs)")
     CameraAppGUI().run()

@@ -4,6 +4,9 @@ import threading
 import datetime
 import time
 import queue
+import logging
+import re
+import tempfile
 from typing import Optional
 
 import cv2
@@ -33,7 +36,7 @@ FRAME_WIDTH, FRAME_HEIGHT = CAMERA_RESOLUTION
 BASIC_PATH = os.path.abspath(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.append(BASIC_PATH)
 
-KEYS_PATH = os.path.join(BASIC_PATH, 'keys/arad')
+KEYS_PATH = os.path.join(BASIC_PATH, r'keys\arad')
 GOOGLE_SERVICE_ACCOUNT_JSON = os.path.join(KEYS_PATH, 'logger-176517.json')
 
 GOOGLE_DRIVE_FOLDER_ID = None
@@ -42,14 +45,29 @@ GOOGLE_DRIVE_MAKE_PUBLIC = True
 ENABLE_URL_SHORTENER = False
 SHORTENER_BACKEND = "tinyurl"
 
+# ---------- LOGGING ----------
+LOG_LEVEL = "INFO"          # "DEBUG" / "INFO" / "WARNING" / "ERROR"
+LOG_FILE = None              # ex: "camera_qr.log" (None => console only)
+
+# ---------- GOOGLE SHEETS (optional log) ----------
+# Met un Spreadsheet ID pour activer la journalisation.
+ENABLE_SHEETS_LOG = True
+GOOGLE_SHEETS_SPREADSHEET_ID = None   # ex: "1AbC..." (dans l'URL du Google Sheet)
+GOOGLE_SHEETS_SPREADSHEET_ID_FILE = os.path.join(KEYS_PATH,"sheet_id.txt")  # contient soit l'ID, soit l'URL du Sheet (1ère ligne)
+GOOGLE_SHEETS_WORKSHEET_NAME = "pi04"
+
+# Si False: on ne log PAS les évènements QR_OK / QR_ERROR dans Google Sheets
+SHEETS_LOG_QR_EVENTS = False
+
+
 # ---------- PNG OVERLAYS ----------
 PIC_DIR =  os.path.join(BASIC_PATH, "pic")
 FRAME_PNG = os.path.join(PIC_DIR, "frame.png")
 LOGO_PNG  = os.path.join(PIC_DIR, "logo.png")
 
-LOGO_SCALE = 0.5
-LOGO_POS_X = 230      # None => bas-droite auto
-LOGO_POS_Y = 350      # None => bas-droite auto
+LOGO_SCALE = 0.3
+LOGO_POS_X = 1050      # None => bas-droite auto
+LOGO_POS_Y = 800      # None => bas-droite auto
 LOGO_MARGIN_X = 20
 LOGO_MARGIN_Y = 20
 
@@ -86,6 +104,55 @@ QR_GAP = 10
 QR_ANIM_STEPS = 12
 QR_ANIM_DELAY_MS = 15
 
+
+def _read_first_nonempty_line(path: str) -> str:
+    """Return first non-empty, non-comment line from a txt file. Empty string if missing."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith('#'):
+                    continue
+                return s
+    except FileNotFoundError:
+        return ''
+    except Exception:
+        return ''
+    return ''
+
+def extract_spreadsheet_id(value: str) -> str:
+    """Accepts either a raw Spreadsheet ID or a full Google Sheets URL and returns the ID."""
+    if not value:
+        return ''
+    v = value.strip()
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", v)
+    if m:
+        return m.group(1)
+    return v
+
+
+# =========================================================
+# LOGGING SETUP
+# =========================================================
+def setup_logging():
+    """Configure les logs console (et optionnellement fichier)."""
+    level = getattr(logging, str(LOG_LEVEL).upper(), logging.INFO)
+
+    handlers = [logging.StreamHandler()]
+    if LOG_FILE:
+        try:
+            from logging.handlers import RotatingFileHandler
+            handlers.append(RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=3, encoding="utf-8"))
+        except Exception:
+            # fallback: pas de fichier
+            pass
+
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        handlers=handlers,
+        force=True,
+)
 
 # =========================================================
 # OUTILS: flip
@@ -309,28 +376,155 @@ class GoogleDriveUploader:
         return url
 
 
+class GoogleSheetsLogger:
+    """Petit logger Google Sheets (append une ligne par évènement).
+
+    Points importants:
+    - spreadsheet_id doit être l'ID (pas l'URL entière). Si tu passes l'URL, on extrait l'ID automatiquement.
+    - worksheet_name doit exister; si l'onglet n'existe pas, on le crée.
+    - Si le nom d'onglet contient des espaces, on met des quotes A1 ('Feuille 1'!A1).
+    """
+
+    def __init__(self, service_account_json: str, spreadsheet_id: str, worksheet_name: str = "logs"):
+        self.service_account_json = service_account_json
+        self.spreadsheet_id = self._normalize_spreadsheet_id(spreadsheet_id)
+        self.worksheet_name = (worksheet_name or "logs").strip()
+        self._svc = None
+        self._init_sheets()
+
+    @staticmethod
+    def _normalize_spreadsheet_id(value: str) -> str:
+        if not value:
+            return value
+        v = str(value).strip()
+        # Si l'utilisateur colle l'URL complète, on extrait l'ID entre /d/ et /edit
+        if "docs.google.com" in v and "/spreadsheets/d/" in v:
+            m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", v)
+            if m:
+                return m.group(1)
+        return v
+
+    def _a1_range(self) -> str:
+        title = self.worksheet_name
+        # A1 notation: si le nom d'onglet a des espaces/symboles, il faut des quotes.
+        if any(ch in title for ch in [" ", "!", ":", "'"]):
+            title = title.replace("'", "''")
+            return f"'{title}'!A1"
+        return f"{title}!A1"
+
+    def _init_sheets(self):
+        try:
+            from googleapiclient.discovery import build
+        except Exception as e:
+            raise RuntimeError(
+                "Librairies Google manquantes pour Sheets. Installe:\n"
+                "  pip install google-api-python-client google-auth-httplib2 google-auth\n"
+                f"Détail: {e}"
+            )
+
+        if not os.path.isfile(self.service_account_json):
+            raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+
+        if not self.spreadsheet_id:
+            raise ValueError("Spreadsheet ID vide. Mets uniquement l'ID (entre /d/ et /edit).")
+
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = service_account.Credentials.from_service_account_file(self.service_account_json, scopes=scopes)
+        self._svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+
+        # Vérifie / crée l'onglet
+        self._ensure_worksheet_exists()
+
+    def _ensure_worksheet_exists(self):
+        """Crée l'onglet worksheet_name s'il n'existe pas."""
+        from googleapiclient.errors import HttpError
+
+        try:
+            meta = self._svc.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
+            sheets = meta.get("sheets", []) or []
+            titles = {s.get("properties", {}).get("title") for s in sheets}
+            if self.worksheet_name not in titles:
+                req = {
+                    "requests": [
+                        {"addSheet": {"properties": {"title": self.worksheet_name}}}
+                    ]
+                }
+                self._svc.spreadsheets().batchUpdate(spreadsheetId=self.spreadsheet_id, body=req).execute()
+        except HttpError as e:
+            # On remonte un message plus lisible (ça aide énormément pour diagnostiquer)
+            detail = ""
+            try:
+                detail = e.content.decode("utf-8", errors="ignore")
+            except Exception:
+                detail = str(e)
+            raise RuntimeError(
+                "Google Sheets: impossible de lire/créer l'onglet. Vérifie:\n"
+                "- Spreadsheet ID correct (pas l'URL)\n"
+                "- le Sheet est partagé avec l'email du service account (Editor)\n"
+                "- Google Sheets API activée dans Google Cloud\n"
+                f"\nDétail HTTP: {detail}"
+            ) from e
+
+    def append_row(self, values: list):
+        """Ajoute une ligne dans l'onglet worksheet_name."""
+        from googleapiclient.errors import HttpError
+
+        body = {"values": [values]}
+        rng = self._a1_range()
+
+        try:
+            self._svc.spreadsheets().values().append(
+                spreadsheetId=self.spreadsheet_id,
+                range=rng,
+                valueInputOption="USER_ENTERED",
+                insertDataOption="INSERT_ROWS",
+                body=body,
+            ).execute()
+        except HttpError as e:
+            detail = ""
+            try:
+                detail = e.content.decode("utf-8", errors="ignore")
+            except Exception:
+                detail = str(e)
+            raise RuntimeError(
+                f"Google Sheets append error (range={rng}). "
+                f"Vérifie que l'onglet existe et que le nom est exact. Détail HTTP: {detail}"
+            ) from e
+
+
 class CaptureStorage:
-    def __init__(self, capture_dir: str, uploader: GoogleDriveUploader):
-        self.capture_dir = capture_dir
+    """Capture une frame, l'upload sur Drive, puis supprime le fichier local.
+
+    Note: il y a forcément un fichier temporaire sur disque car googleapiclient MediaFileUpload
+    attend un chemin local. Le fichier est supprimé immédiatement après upload.
+    """
+
+    def __init__(self, uploader: GoogleDriveUploader):
         self.uploader = uploader
-        os.makedirs(self.capture_dir, exist_ok=True)
 
     def save_frame_and_upload(self, frame_bgr) -> tuple[str, str]:
         # microseconds -> évite collisions et garantit une URL/QR par photo
         ts = datetime.datetime.now().strftime("%Y_%m_%d__%H_%M_%S__%f")
         filename = f"capture_{ts}.jpg"
-        filepath = os.path.join(self.capture_dir, filename)
 
-        ok = cv2.imwrite(filepath, frame_bgr)
+        tmp_path = os.path.join(tempfile.gettempdir(), filename)
+
+        ok = cv2.imwrite(tmp_path, frame_bgr)
         if not ok:
-            raise IOError(f"Impossible d'écrire l'image: {filepath}")
+            raise IOError(f"Impossible d'écrire l'image temporaire: {tmp_path}")
 
-        url = self.uploader.upload_and_get_url(filepath)
-        return filepath, url
+        try:
+            url = self.uploader.upload_and_get_url(tmp_path)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+        return filename, url
 
     def close(self):
         pass
-
 
 # =========================================================
 # URL -> QR code
@@ -365,6 +559,8 @@ def get_roi_mean_bgr(preview_bgr, roi_x=ROI_X, roi_y=ROI_Y, roi_w=ROI_W, roi_h=R
 # =========================================================
 class CameraAppGUI:
     def __init__(self):
+        self._logger = logging.getLogger('camera_qr_google_drive')
+
         # Webcam
         self.cap = cv2.VideoCapture(CAM_INDEX, cv2.CAP_DSHOW)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -402,18 +598,53 @@ class CameraAppGUI:
         # disable ROI after capture
         self._roi_disabled_until = 0.0
 
-        # Google uploader + storage
-        uploader = GoogleDriveUploader(
-            service_account_json=GOOGLE_SERVICE_ACCOUNT_JSON,
-            folder_id=GOOGLE_DRIVE_FOLDER_ID,
-            make_public=GOOGLE_DRIVE_MAKE_PUBLIC,
-            enable_shortener=ENABLE_URL_SHORTENER,
-            shortener_backend=SHORTENER_BACKEND,
-        )
-        self.storage = CaptureStorage(CAPTURE_DIR, uploader)
+        # Google uploader + storage (avec logs d'erreur au démarrage)
+        self.storage = None
+        try:
+            uploader = GoogleDriveUploader(
+                service_account_json=GOOGLE_SERVICE_ACCOUNT_JSON,
+                folder_id=GOOGLE_DRIVE_FOLDER_ID,
+                make_public=GOOGLE_DRIVE_MAKE_PUBLIC,
+                enable_shortener=ENABLE_URL_SHORTENER,
+                shortener_backend=SHORTENER_BACKEND,
+            )
+            self.storage = CaptureStorage(uploader)
+            self._logger.info("Google Drive uploader initialisé.")
+        except Exception:
+            self._logger.exception("Google Drive init failed")
+            self.storage = None
 
-        # Tkinter UI (sans lien, sans phrases ROI)
+        # Google Sheets logger (optionnel)
+        self.sheets_logger = None
+        if ENABLE_SHEETS_LOG:
+            sheet_id = GOOGLE_SHEETS_SPREADSHEET_ID
+            if not sheet_id:
+                sheet_id = _read_first_nonempty_line(GOOGLE_SHEETS_SPREADSHEET_ID_FILE)
+                if sheet_id:
+                    self._logger.info("Spreadsheet ID lu depuis %s", GOOGLE_SHEETS_SPREADSHEET_ID_FILE)
+
+            sheet_id = extract_spreadsheet_id(sheet_id)
+
+            if sheet_id:
+                try:
+                    self.sheets_logger = GoogleSheetsLogger(
+                        service_account_json=GOOGLE_SERVICE_ACCOUNT_JSON,
+                        spreadsheet_id=sheet_id,
+                        worksheet_name=GOOGLE_SHEETS_WORKSHEET_NAME,
+                    )
+                    self._logger.info("Google Sheets logger initialisé.")
+                except Exception:
+                    self._logger.exception("Google Sheets init failed")
+                    self.sheets_logger = None
+            else:
+                self._logger.warning(
+                    "Google Sheets log activé mais aucun Sheet ID trouvé (ni GOOGLE_SHEETS_SPREADSHEET_ID ni %s).",
+                    GOOGLE_SHEETS_SPREADSHEET_ID_FILE,
+                )
+
+# Tkinter UI
         self.root = tk.Tk()
+        self._logger.info("Tkinter root créé, ouverture de la fenêtre...")
         self.root.title("Camera → Drive → QR")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -440,7 +671,7 @@ class CameraAppGUI:
         self.root.after(10, self.update_preview)
         self.root.after(25, self._process_ui_queue)
 
-    # ---------- UI queue ----------
+# ---------- UI queue ----------
     def ui(self, fn):
         self._uiq.put(fn)
 
@@ -657,18 +888,66 @@ class CameraAppGUI:
                 frame = apply_flip(frame, FLIP_MODE)
 
             frame = apply_frame_and_logo(frame)
-
-            local_path, url = self.storage.save_frame_and_upload(frame)
-            if not url:
+            if self.storage is None:
+                self._logger.error("Capture demandée mais Google Drive n'est pas initialisé (storage=None).")
                 return
-
-            qr_img = make_qr_image(url, size=260)
-
+            
+            try:
+                local_path, url = self.storage.save_frame_and_upload(frame)
+            except Exception:
+                self._logger.exception("Upload vers Drive a échoué")
+                # log Sheets (si dispo)
+                if self.sheets_logger is not None:
+                    try:
+                        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        self.sheets_logger.append_row([ts, "UPLOAD_ERROR", "", "", "exception"])
+                    except Exception:
+                        self._logger.exception("Sheets append_row failed (UPLOAD_ERROR)")
+                return
+            
+            if not url:
+                self._logger.error("Upload OK mais URL vide (url='').")
+                if self.sheets_logger is not None:
+                    try:
+                        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        self.sheets_logger.append_row([ts, "URL_EMPTY", local_path, "", ""])
+                    except Exception:
+                        self._logger.exception("Sheets append_row failed (URL_EMPTY)")
+                return
+            
+            self._logger.info("URL reçue: %s", url)
+            if self.sheets_logger is not None:
+                try:
+                    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    self.sheets_logger.append_row([ts, "UPLOAD_OK", local_path, url, ""])
+                except Exception:
+                    self._logger.exception("Sheets append_row failed (UPLOAD_OK)")
+            
+            try:
+                qr_img = make_qr_image(url, size=260)
+            except Exception:
+                self._logger.exception("Conversion URL -> QR a échoué")
+                if self.sheets_logger is not None and SHEETS_LOG_QR_EVENTS:
+                    try:
+                        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        self.sheets_logger.append_row([ts, "QR_ERROR", local_path, url, "exception"])
+                    except Exception:
+                        self._logger.exception("Sheets append_row failed (QR_ERROR)")
+                return
+            
+            self._logger.info("QR généré (URL -> QR) et prêt à être affiché.")
+            if self.sheets_logger is not None and SHEETS_LOG_QR_EVENTS:
+                try:
+                    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    self.sheets_logger.append_row([ts, "QR_OK", local_path, url, ""])
+                except Exception:
+                    self._logger.exception("Sheets append_row failed (QR_OK)")
             # Désactive ROI après capture
             self._roi_disabled_until = time.monotonic() + ROI_DISABLE_AFTER_CAPTURE_S
 
             # Push QR dans l’historique
             self.ui(lambda: self.push_qr_to_history(qr_img))
+            self._logger.debug('QR push dans l\'historique UI.')
 
         finally:
             self._sequence_running = False
@@ -693,8 +972,12 @@ class CameraAppGUI:
             pass
 
     def run(self):
+        self._logger.info("Entrée dans mainloop (la fenêtre doit rester ouverte).")
         self.root.mainloop()
+        self._logger.info("Sortie de mainloop (fenêtre fermée).")
 
 
 if __name__ == "__main__":
+    setup_logging()
+    logging.getLogger("camera_qr_google_drive").info("Démarrage de l'application Camera → Drive → QR")
     CameraAppGUI().run()
