@@ -26,17 +26,59 @@ from google.auth.transport.requests import Request
 CAPTURE_DIR = "captures"
 
 PREVIEW_W = 640
-PREVIEW_H = 360
+PREVIEW_H = 480
+
+# ---------------------------------------------------------
+# UI / LAYOUT CONSTANTS (editable)
+# ---------------------------------------------------------
+# LIVE preview overlays:
+# - If True: show decorative frame+logo on the live preview (screen).
+# - If False: live preview stays clean; overlays can still be burned into the saved/uploaded photo.
+PREVIEW_APPLY_OVERLAYS = False
+
+# Saved/uploaded photo overlays:
+CAPTURE_APPLY_OVERLAYS = True
+
+# Letterbox background color (areas where the camera image does NOT fill the screen)
+# BGR format (OpenCV): (Blue, Green, Red)
+LETTERBOX_BG_BGR = (0, 0, 0)
+
+# How the camera image is positioned inside the display area (when letterboxing happens)
+# Options: 'c' (center), 'tl','tr','bl','br'
+CAMERA_ANCHOR = 'c'
+CAMERA_ANCHOR_MARGIN_PX = 0
+
+# QR strip sizing/placement
+QR_SIZE_MODE = 'fixed'         # 'auto' or 'fixed'
+QR_FIXED_SIZE_PX = 150        # used only if QR_SIZE_MODE == 'fixed'
+QR_SIZE_MIN = 80
+QR_SIZE_MAX = 320
+
+QR_STRIP_ALIGN = 'center'     # 'center' or 'left' or 'right'
+QR_STRIP_MARGIN_PX = 0
+
+# QR strip background (Tk color name or hex)
+QR_BAR_BG = '#000000'
+
+# Logo sizing mode (applied to SAVED/UPLOADED photo when CAPTURE_APPLY_OVERLAYS=True)
+# - 'scale': use LOGO_SCALE (fraction of image width)
+# - 'pixels': use LOGO_TARGET_W_PX (absolute pixels in the image you overlay on)
+LOGO_SIZE_MODE = 'scale'
+LOGO_TARGET_W_PX = None       # e.g. 420 (pixels). None means disabled for 'pixels' mode.
 
 CAM_INDEX = 0
-CAMERA_RESOLUTION = (640, 360)
+CAMERA_RESOLUTION = (640, 480)
 FRAME_WIDTH, FRAME_HEIGHT = CAMERA_RESOLUTION
 
 # ---------- GOOGLE DRIVE (service account) ----------
 BASIC_PATH = os.path.abspath(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.append(BASIC_PATH)
 
-KEYS_PATH = os.path.join(BASIC_PATH, r'keys\arad')
+KEYS_PATH_CANDIDATES = [
+    os.path.join(BASIC_PATH, 'keys', 'arad'),
+    os.path.join(os.path.dirname(os.path.realpath(__file__)), 'keys', 'arad'),
+]
+KEYS_PATH = next((p for p in KEYS_PATH_CANDIDATES if os.path.isdir(p)), KEYS_PATH_CANDIDATES[0])
 GOOGLE_SERVICE_ACCOUNT_JSON = os.path.join(KEYS_PATH, 'logger-176517.json')
 
 GOOGLE_DRIVE_FOLDER_ID = None
@@ -65,9 +107,16 @@ PIC_DIR =  os.path.join(BASIC_PATH, "pic")
 FRAME_PNG = os.path.join(PIC_DIR, "frame.png")
 LOGO_PNG  = os.path.join(PIC_DIR, "logo.png")
 
-LOGO_SCALE = 0.3
-LOGO_POS_X = 1050      # None => bas-droite auto
-LOGO_POS_Y = 800      # None => bas-droite auto
+LOGO_SCALE = 0.5  # fraction of the image width used for logo width
+# Logo position options:
+# - set LOGO_ANCHOR to one of: 'br','tr','bl','tl','c' (bottom-right, top-right, ...)
+# - OR set LOGO_POS_X / LOGO_POS_Y:
+#     * None => auto based on LOGO_ANCHOR + margins
+#     * 0.0..1.0 => percentage of available space (0.0=left/top, 1.0=right/bottom)
+#     * >= 1 => pixels (absolute)
+LOGO_ANCHOR = 'br'
+LOGO_POS_X = 220
+LOGO_POS_Y = 350
 LOGO_MARGIN_X = 20
 LOGO_MARGIN_Y = 20
 
@@ -99,7 +148,7 @@ DRAW_ROI_RECT = True
 
 # ---------- QR HISTORY ----------
 QR_HISTORY = 4
-QR_SIZE = 130
+QR_SIZE = QR_FIXED_SIZE_PX  # legacy alias; prefer QR_FIXED_SIZE_PX / QR_SIZE_MODE
 QR_GAP = 10
 QR_ANIM_STEPS = 12
 QR_ANIM_DELAY_MS = 15
@@ -204,26 +253,120 @@ def overlay_rgba(dst_bgr, src_rgba, x, y):
 
 
 def apply_frame_and_logo(frame_bgr):
+    """
+    Add the decorative frame + logo overlays on top of an image.
+
+    Notes:
+    - Works on any resolution (camera capture, preview, etc.)
+    - Logo size is relative to the image width (LOGO_SCALE)
+    - Logo position can be automatic (LOGO_ANCHOR) or manual (LOGO_POS_X/Y)
+    - Uses simple caching so we don't re-decode PNG files every frame.
+    """
     H, W = frame_bgr.shape[:2]
 
-    frame_rgba = cv2.imread(FRAME_PNG, cv2.IMREAD_UNCHANGED)
+    # ---- Lazy caches (per-process) ----
+    # resized overlays are cached by output size to avoid repeated PNG decode + resize.
+    if not hasattr(apply_frame_and_logo, "_frame_cache"):
+        apply_frame_and_logo._frame_cache = {}  # (W,H)->rgba
+        apply_frame_and_logo._logo_orig = None  # original rgba
+        apply_frame_and_logo._logo_cache = {}   # target_w->rgba
+
+    # -------- frame overlay (full image) --------
+    frame_rgba = apply_frame_and_logo._frame_cache.get((W, H))
+    if frame_rgba is None:
+        src_rgba = cv2.imread(FRAME_PNG, cv2.IMREAD_UNCHANGED)
+        if src_rgba is not None:
+            frame_rgba = cv2.resize(src_rgba, (W, H), interpolation=cv2.INTER_AREA)
+            apply_frame_and_logo._frame_cache[(W, H)] = frame_rgba
+
     if frame_rgba is not None:
-        frame_rgba = cv2.resize(frame_rgba, (W, H), interpolation=cv2.INTER_AREA)
         frame_bgr = overlay_rgba(frame_bgr, frame_rgba, 0, 0)
 
-    logo_rgba = cv2.imread(LOGO_PNG, cv2.IMREAD_UNCHANGED)
-    if logo_rgba is not None:
-        target_w = max(1, int(W * LOGO_SCALE))
+    # -------- logo overlay --------
+    if apply_frame_and_logo._logo_orig is None:
+        apply_frame_and_logo._logo_orig = cv2.imread(LOGO_PNG, cv2.IMREAD_UNCHANGED)
+
+    logo_rgba = apply_frame_and_logo._logo_orig
+    if logo_rgba is None:
+        return frame_bgr
+
+    # Compute logo size (keep aspect ratio)
+    # Compute logo width
+    if str(LOGO_SIZE_MODE).lower() == 'pixels' and LOGO_TARGET_W_PX is not None:
+        target_w = max(1, int(LOGO_TARGET_W_PX))
+    else:
+        # default: scale with image width
+        target_w = max(1, int(W * float(LOGO_SCALE)))
+    target_w = min(target_w, W)  # safety
+    cached = apply_frame_and_logo._logo_cache.get(target_w)
+    if cached is None:
         ratio = target_w / max(1, logo_rgba.shape[1])
         target_h = max(1, int(logo_rgba.shape[0] * ratio))
-        logo_rgba = cv2.resize(logo_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
+        target_h = min(target_h, H)
+        cached = cv2.resize(logo_rgba, (target_w, target_h), interpolation=cv2.INTER_AREA)
+        apply_frame_and_logo._logo_cache[target_w] = cached
+    else:
+        target_h = cached.shape[0]
 
-        x = (W - target_w - LOGO_MARGIN_X) if LOGO_POS_X is None else int(LOGO_POS_X)
-        y = (H - target_h - LOGO_MARGIN_Y) if LOGO_POS_Y is None else int(LOGO_POS_Y)
+    # Positioning:
+    # 1) If LOGO_POS_X/Y are None => anchor logic
+    # 2) If 0..1 => relative percentage of available space
+    # 3) Else => pixel coordinates
+    avail_x = max(0, W - target_w)
+    avail_y = max(0, H - target_h)
 
-        frame_bgr = overlay_rgba(frame_bgr, logo_rgba, x, y)
+    def _pos(val, avail, margin, anchor_side):
+        if val is None:
+            if anchor_side == "min":
+                return int(margin)
+            if anchor_side == "center":
+                return int(avail / 2)
+            return int(avail - margin)
+        try:
+            v = float(val)
+        except Exception:
+            v = 0.0
+        if 0.0 <= v <= 1.0:
+            return int(v * avail)
+        return int(v)
 
+    anchor = str(LOGO_ANCHOR).lower().strip()
+    if anchor in ("br", "rb"):
+        ax, ay = "max", "max"
+    elif anchor in ("tr", "rt"):
+        ax, ay = "max", "min"
+    elif anchor in ("bl", "lb"):
+        ax, ay = "min", "max"
+    elif anchor in ("tl", "lt"):
+        ax, ay = "min", "min"
+    else:  # center
+        ax, ay = "center", "center"
+
+    x = _pos(LOGO_POS_X, avail_x, LOGO_MARGIN_X, ax)
+    y = _pos(LOGO_POS_Y, avail_y, LOGO_MARGIN_Y, ay)
+
+    # Clamp inside the image
+    x = max(0, min(x, avail_x))
+    y = max(0, min(y, avail_y))
+
+    frame_bgr = overlay_rgba(frame_bgr, cached, x, y)
     return frame_bgr
+
+
+def apply_frame_and_logo_in_rect(canvas_bgr, x: int, y: int, w: int, h: int):
+    """
+    Apply the overlays only inside a rectangle of the canvas (useful when the preview is letterboxed).
+    """
+    Hc, Wc = canvas_bgr.shape[:2]
+    x = max(0, min(int(x), Wc - 1))
+    y = max(0, min(int(y), Hc - 1))
+    w = max(1, min(int(w), Wc - x))
+    h = max(1, min(int(h), Hc - y))
+
+    sub = canvas_bgr[y:y+h, x:x+w]
+    sub2 = apply_frame_and_logo(sub)
+    canvas_bgr[y:y+h, x:x+w] = sub2
+    return canvas_bgr
 
 
 # =========================================================
@@ -558,24 +701,27 @@ def get_roi_mean_bgr(preview_bgr, roi_x=ROI_X, roi_y=ROI_Y, roi_w=ROI_W, roi_h=R
 # APP
 # =========================================================
 class CameraAppGUI:
+    """
+    Full-screen Tkinter app:
+    - Live camera preview (scaled to window, keeps aspect ratio)
+    - ROI trigger (ROI defined in CAMERA_RESOLUTION coordinates, auto-mapped to preview)
+    - Countdown + flash + capture
+    - Upload capture to Google Drive, generate QR, show QR history strip
+    """
+
     def __init__(self):
         self._logger = logging.getLogger('camera_qr_google_drive')
 
-        # Webcam
-        self.cap = cv2.VideoCapture(CAM_INDEX, cv2.CAP_DSHOW)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        if not self.cap.isOpened():
-            raise RuntimeError("Impossible d'ouvrir la webcam. Change CAM_INDEX (0/1/2).")
-
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
-
+        # -----------------------------
+        # Runtime state / thread safety
+        # -----------------------------
         self._frame_lock = threading.Lock()
         self._capture_lock = threading.Lock()
         self._last_frame_bgr = None
         self._running = True
+        self._sequence_running = False
 
-        # UI safe queue
+        # UI-safe queue (call Tk from the Tk thread only)
         self._uiq = queue.Queue()
 
         # UX capture
@@ -583,22 +729,109 @@ class CameraAppGUI:
         self._flash_until = 0.0
         self._flash_color = FLASH_COLOR
 
-        # Baseline (pas de texte à l’écran)
+        # Baseline for ROI trigger
         self._baseline_start = time.monotonic()
         self._baseline_samples = []
         self._baseline_mean = None
 
-        # Hold timer
+        # Hold timer for ROI trigger
         self._roi_active_since = None
 
-        # Cooldown / séquence
+        # Cooldown / disable ROI after capture
         self._cooldown_until = 0.0
-        self._sequence_running = False
-
-        # disable ROI after capture
         self._roi_disabled_until = 0.0
 
-        # Google uploader + storage (avec logs d'erreur au démarrage)
+        # Layout (dynamic)
+        # preview_w/preview_h = processing size (keep small for speed)
+        self.preview_w = PREVIEW_W
+        self.preview_h = PREVIEW_H
+        # display_w/display_h = actual on-screen area (fullscreen/window)
+        self.display_w = PREVIEW_W
+        self.display_h = PREVIEW_H
+        self.qr_size = int(QR_FIXED_SIZE_PX)
+        self.qr_gap = QR_GAP
+        self.qr_canvas_h = self.qr_size + 2 * int(QR_GAP)
+        self._layout_pending = False
+        self._last_layout = None
+
+        # QR history UI state
+        self._qr_items = []
+        self._qr_animating = False
+
+        # -----------------------------
+        # Init camera and services
+        # -----------------------------
+        self._init_camera()
+        self._init_services()
+
+        # -----------------------------
+        # Tkinter UI
+        # -----------------------------
+        self.root = tk.Tk()
+        self.root.title("Camera → Drive → QR")
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # Fullscreen by default + Escape toggles
+        self._is_fullscreen = True
+        self.root.attributes("-fullscreen", True)
+        self.root.bind("<Escape>", lambda e: self.toggle_fullscreen())
+
+        # Main container (no padding, fullscreen)
+        main = ttk.Frame(self.root, padding=0)
+        main.pack(fill="both", expand=True)
+
+        # Preview fills all space above QR strip
+        self.preview_label = ttk.Label(main)
+        self.preview_label.pack(fill="both", expand=True)
+
+        # QR strip (bottom)
+        self.qr_canvas = tk.Canvas(main, highlightthickness=0, bg=QR_BAR_BG)
+        self.qr_canvas.pack(side="bottom", fill="x")
+
+        self._tk_preview_img = None
+
+        # Recompute layout when window size changes (debounced)
+        self.root.bind("<Configure>", self._on_configure)
+
+        # loops
+        self.root.after(10, self.update_preview)
+        self.root.after(25, self._process_ui_queue)
+
+    # =====================================================
+    # Init helpers
+    # =====================================================
+    def _init_camera(self):
+        """Open the camera with a platform-appropriate backend."""
+        backend = None
+        if sys.platform.startswith("win"):
+            backend = cv2.CAP_DSHOW
+        else:
+            backend = getattr(cv2, "CAP_V4L2", None)
+
+        if backend is None:
+            self.cap = cv2.VideoCapture(CAM_INDEX)
+        else:
+            self.cap = cv2.VideoCapture(CAM_INDEX, backend)
+
+        # Keep latency low when supported
+        try:
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+        if not self.cap.isOpened():
+            raise RuntimeError("Impossible d'ouvrir la webcam. Change CAM_INDEX (0/1/2).")
+
+        # Request camera resolution (may be adjusted by driver)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+        actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"[CAM] Requested: {CAMERA_RESOLUTION[0]}x{CAMERA_RESOLUTION[1]} | Actual: {actual_w}x{actual_h}")
+
+    def _init_services(self):
+        """Init Google Drive uploader + optional Google Sheets logger."""
+        # Google uploader + storage
         self.storage = None
         try:
             uploader = GoogleDriveUploader(
@@ -614,7 +847,7 @@ class CameraAppGUI:
             self._logger.exception("Google Drive init failed")
             self.storage = None
 
-        # Google Sheets logger (optionnel)
+        # Google Sheets logger (optional)
         self.sheets_logger = None
         if ENABLE_SHEETS_LOG:
             sheet_id = GOOGLE_SHEETS_SPREADSHEET_ID
@@ -642,37 +875,19 @@ class CameraAppGUI:
                     GOOGLE_SHEETS_SPREADSHEET_ID_FILE,
                 )
 
-# Tkinter UI
-        self.root = tk.Tk()
-        self._logger.info("Tkinter root créé, ouverture de la fenêtre...")
-        self.root.title("Camera → Drive → QR")
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+    # =====================================================
+    # Fullscreen toggle
+    # =====================================================
+    def toggle_fullscreen(self):
+        """Toggle fullscreen on/off (Escape key)."""
+        self._is_fullscreen = not self._is_fullscreen
+        self.root.attributes("-fullscreen", self._is_fullscreen)
 
-        main = ttk.Frame(self.root, padding=12)
-        main.pack(fill="both", expand=True)
-
-        ttk.Label(main, text="Camera → QR", font=("Arial", 16)).pack(pady=(0, 8))
-
-        self.preview_label = ttk.Label(main)
-        self.preview_label.pack(pady=(0, 10))
-
-        # QR strip
-        self.qr_canvas_w = QR_HISTORY * QR_SIZE + (QR_HISTORY + 1) * QR_GAP
-        self.qr_canvas_h = QR_SIZE + 2 * QR_GAP
-        self.qr_canvas = tk.Canvas(main, width=self.qr_canvas_w, height=self.qr_canvas_h, highlightthickness=0)
-        self.qr_canvas.pack(pady=(4, 0))
-
-        self._qr_items = []
-        self._qr_animating = False
-
-        self._tk_preview_img = None
-
-        # loops
-        self.root.after(10, self.update_preview)
-        self.root.after(25, self._process_ui_queue)
-
-# ---------- UI queue ----------
+    # =====================================================
+    # UI queue
+    # =====================================================
     def ui(self, fn):
+        """Schedule a UI update from a worker thread."""
         self._uiq.put(fn)
 
     def _process_ui_queue(self):
@@ -684,21 +899,102 @@ class CameraAppGUI:
                 try:
                     fn()
                 except Exception:
-                    pass
+                    self._logger.debug("UI callback failed", exc_info=True)
         except queue.Empty:
             pass
         self.root.after(25, self._process_ui_queue)
 
-    # ---------- QR strip helpers ----------
+    # =====================================================
+    # Layout / resize handling
+    # =====================================================
+    def _on_configure(self, event):
+        """Debounce layout recomputation on window resize."""
+        if self._layout_pending:
+            return
+        self._layout_pending = True
+        self.root.after(120, self._apply_layout)
+
+    def _apply_layout(self):
+        """Compute preview and QR sizes from current window size."""
+        self._layout_pending = False
+        if not self._running:
+            return
+
+        win_w = max(320, int(self.root.winfo_width()))
+        win_h = max(240, int(self.root.winfo_height()))
+
+        # QR size adapts to window width (fits QR_HISTORY items + gaps) OR can be fixed from constants
+        gap = int(self.qr_gap)
+        if str(QR_SIZE_MODE).lower() == 'fixed':
+            qr_size = int(QR_FIXED_SIZE_PX)
+        else:
+            max_qr = int((win_w - (QR_HISTORY + 1) * gap) / max(1, QR_HISTORY))
+            qr_size = int(max(QR_SIZE_MIN, min(QR_SIZE_MAX, max_qr)))
+
+        qr_canvas_h = qr_size + 2 * gap
+        preview_h = max(200, win_h - qr_canvas_h)
+
+        layout = (win_w, win_h, qr_size, qr_canvas_h, preview_h)
+        if self._last_layout == layout:
+            return
+        self._last_layout = layout
+
+        # Apply new layout
+        self.qr_size = qr_size
+        self.qr_canvas_h = qr_canvas_h
+        # Display area (fullscreen/window): this is how large we *render* the preview.
+        self.display_w = win_w
+        self.display_h = preview_h
+        # Processing preview size: keep it small for speed (especially on Raspberry Pi).
+        # ROI + detection are computed on this size, then we scale/letterbox for display.
+        self.preview_w = PREVIEW_W
+        self.preview_h = PREVIEW_H
+
+        self.qr_canvas.config(width=win_w, height=qr_canvas_h, bg=QR_BAR_BG)
+
+        # If size changed, reset the QR strip to avoid stretched items
+        self._reset_qr_strip()
+
+    def _reset_qr_strip(self):
+        """Clear QR strip and history (called on resize)."""
+        try:
+            self.qr_canvas.delete("all")
+        except Exception:
+            pass
+        self._qr_items.clear()
+        self._qr_animating = False
+
+    # =====================================================
+    # QR strip helpers (dynamic sizing)
+    # =====================================================
     def _qr_target_centers(self):
+        """Return the target X centers for each QR slot + common Y center."""
+        w = max(1, int(self.qr_canvas.winfo_width() or self.preview_w))
+        gap = int(self.qr_gap)
+        size = int(self.qr_size)
+
+        # Placement of the strip: center/left/right + optional margin
+        total = QR_HISTORY * size + (QR_HISTORY + 1) * gap
+        align = str(QR_STRIP_ALIGN).lower()
+        margin = int(QR_STRIP_MARGIN_PX)
+        if align == 'left':
+            left = max(0, margin)
+        elif align == 'right':
+            left = max(0, int(w - total - margin))
+        else:
+            # center
+            left = max(0, int((w - total) / 2) + margin)
+
         centers = []
         for i in range(QR_HISTORY):
-            x_left = QR_GAP + i * (QR_SIZE + QR_GAP)
-            centers.append(x_left + QR_SIZE // 2)
-        cy = QR_GAP + QR_SIZE // 2
+            x_left = left + gap + i * (size + gap)
+            centers.append(x_left + size // 2)
+
+        cy = gap + size // 2
         return centers, cy
 
     def _animate_qr_to_targets(self, start_positions, target_positions, steps=QR_ANIM_STEPS, delay=QR_ANIM_DELAY_MS, on_done=None):
+        """Smoothly animate QR items to their new positions."""
         self._qr_animating = True
 
         def step(k):
@@ -720,11 +1016,15 @@ class CameraAppGUI:
         step(0)
 
     def push_qr_to_history(self, qr_pil_img: Image.Image):
-        qr_pil_img = qr_pil_img.resize((QR_SIZE, QR_SIZE))
+        """Insert a new QR in the strip (animated), keeping last QR_HISTORY."""
+        size = int(self.qr_size)
+        gap = int(self.qr_gap)
+
+        qr_pil_img = qr_pil_img.resize((size, size))
         qr_tk = ImageTk.PhotoImage(qr_pil_img)
 
         centers, cy = self._qr_target_centers()
-        start_x_new = -QR_SIZE // 2
+        start_x_new = -size // 2
         new_id = self.qr_canvas.create_image(start_x_new, cy, image=qr_tk)
         self._qr_items.insert(0, {"id": new_id, "img": qr_tk})
 
@@ -738,7 +1038,8 @@ class CameraAppGUI:
             if i < QR_HISTORY:
                 target_positions.append(centers[i])
             else:
-                target_positions.append(self.qr_canvas_w + QR_SIZE)
+                # move out to the right before deleting
+                target_positions.append(self.preview_w + size)
 
         def cleanup():
             nonlocal to_remove
@@ -752,6 +1053,7 @@ class CameraAppGUI:
                 except ValueError:
                     pass
 
+            # Snap remaining to targets
             centers2, cy2 = self._qr_target_centers()
             for i, it in enumerate(self._qr_items[:QR_HISTORY]):
                 self.qr_canvas.coords(it["id"], centers2[i], cy2)
@@ -762,29 +1064,65 @@ class CameraAppGUI:
 
         self._animate_qr_to_targets(start_positions, target_positions, on_done=cleanup)
 
-    # ---------- Preview loop ----------
+    # =====================================================
+    # ROI mapping (camera -> preview)
+    # =====================================================
+    def _roi_cam_to_preview(self, frame_w: int, frame_h: int):
+        """
+        ROI_* values are defined in CAMERA coordinates (FRAME_WIDTH/FRAME_HEIGHT).
+        This maps them to the current preview size (preview_w/preview_h).
+        """
+        if frame_w <= 0 or frame_h <= 0:
+            return 0, 0, 1, 1
+
+        sx = self.preview_w / frame_w
+        sy = self.preview_h / frame_h
+
+        # Clamp ROI in camera coordinates, then scale to preview coordinates
+        rx = max(0, min(frame_w - 1, int(ROI_X)))
+        ry = max(0, min(frame_h - 1, int(ROI_Y)))
+        rw = max(1, min(frame_w - rx, int(ROI_W)))
+        rh = max(1, min(frame_h - ry, int(ROI_H)))
+
+        x = int(rx * sx)
+        y = int(ry * sy)
+        w = max(1, int(rw * sx))
+        h = max(1, int(rh * sy))
+        return x, y, w, h
+
+    # =====================================================
+    # Preview loop
+    # =====================================================
     def update_preview(self):
+        """Main preview loop (Tk thread)."""
         if not self._running:
             return
 
         ok, frame = self.cap.read()
         if ok and frame is not None:
+            frame_h, frame_w = frame.shape[:2]
+
             with self._frame_lock:
                 self._last_frame_bgr = frame
 
-            small = cv2.resize(frame, (PREVIEW_W, PREVIEW_H), interpolation=cv2.INTER_AREA)
+            # Resize frame to current preview size
+            interp = cv2.INTER_AREA if (self.preview_w <= frame_w and self.preview_h <= frame_h) else cv2.INTER_LINEAR
+            small = cv2.resize(frame, (self.preview_w, self.preview_h), interpolation=interp)
 
             if FLIP_PREVIEW:
                 small = apply_flip(small, FLIP_MODE)
 
             now = time.monotonic()
-            roi_mean = get_roi_mean_bgr(small)
 
-            # Baseline silencieuse
+            # Map ROI from camera coordinates to preview coordinates
+            roi_x, roi_y, roi_w, roi_h = self._roi_cam_to_preview(frame_w, frame_h)
+            roi_mean = get_roi_mean_bgr(small, roi_x=roi_x, roi_y=roi_y, roi_w=roi_w, roi_h=roi_h)
+
+            # Baseline collection (silent)
             if self._baseline_mean is None:
                 elapsed = now - self._baseline_start
                 self._baseline_samples.append(roi_mean)
-                if elapsed >= BASELINE_SECONDS:
+                if elapsed >= BASELINE_SECONDS and len(self._baseline_samples) > 0:
                     arr = np.stack(self._baseline_samples, axis=0)
                     self._baseline_mean = arr.mean(axis=0)
             else:
@@ -810,7 +1148,7 @@ class CameraAppGUI:
                     else:
                         self._roi_active_since = None
 
-            # ROI rectangle: vert si actif, rouge si désactivé (toujours visible)
+            # ROI rectangle: green when active, red otherwise
             if DRAW_ROI_RECT:
                 roi_is_active = (
                     self._baseline_mean is not None
@@ -819,37 +1157,73 @@ class CameraAppGUI:
                     and now >= self._cooldown_until
                 )
                 color = (0, 255, 0) if roi_is_active else (0, 0, 255)
-                x1 = int(ROI_X)
-                y1 = int(ROI_Y)
-                x2 = int(ROI_X + ROI_W)
-                y2 = int(ROI_Y + ROI_H)
+                x1 = int(roi_x)
+                y1 = int(roi_y)
+                x2 = int(roi_x + roi_w)
+                y2 = int(roi_y + roi_h)
                 cv2.rectangle(small, (x1, y1), (x2, y2), color, 2)
 
-            # flash
+            # flash overlay
             if now < self._flash_until:
                 small[:] = 0 if self._flash_color.lower() == "black" else 255
 
-            # countdown (uniquement sur l’image)
+            # countdown overlay
             if self._countdown_text is not None:
                 text = str(self._countdown_text)
                 font = cv2.FONT_HERSHEY_SIMPLEX
-                scale = 3.0
-                thickness = 8
+                scale = max(1.0, min(self.preview_w, self.preview_h) / 250.0)
+                thickness = max(2, int(scale * 2.5))
                 (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
-                x = int((PREVIEW_W - tw) / 2)
-                y = int((PREVIEW_H + th) / 2)
+                x = int((self.preview_w - tw) / 2)
+                y = int((self.preview_h + th) / 2)
                 cv2.putText(small, text, (x, y), font, scale, (0, 0, 0), thickness + 6, cv2.LINE_AA)
                 cv2.putText(small, text, (x, y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            # Optional live preview overlays (decorative frame/logo)
+            if PREVIEW_APPLY_OVERLAYS:
+                small = apply_frame_and_logo(small)
 
-            rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+            # Letterbox into the on-screen area while keeping aspect ratio
+            disp_w = max(1, int(self.display_w))
+            disp_h = max(1, int(self.display_h))
+            src_h, src_w = small.shape[:2]
+            scale = min(disp_w / max(1, src_w), disp_h / max(1, src_h))
+            fit_w = max(1, int(src_w * scale))
+            fit_h = max(1, int(src_h * scale))
+            # Anchor positioning inside the display area
+            margin = int(CAMERA_ANCHOR_MARGIN_PX)
+            anchor = str(CAMERA_ANCHOR).lower()
+            if anchor == 'tl':
+                x0, y0 = margin, margin
+            elif anchor == 'tr':
+                x0, y0 = disp_w - fit_w - margin, margin
+            elif anchor == 'bl':
+                x0, y0 = margin, disp_h - fit_h - margin
+            elif anchor == 'br':
+                x0, y0 = disp_w - fit_w - margin, disp_h - fit_h - margin
+            else:
+                # center
+                x0, y0 = (disp_w - fit_w) // 2, (disp_h - fit_h) // 2
+
+            display_bgr = np.zeros((disp_h, disp_w, 3), dtype=np.uint8)
+            display_bgr[:] = np.array(LETTERBOX_BG_BGR, dtype=np.uint8)
+            interp2 = cv2.INTER_AREA if (fit_w <= src_w and fit_h <= src_h) else cv2.INTER_LINEAR
+            resized = cv2.resize(small, (fit_w, fit_h), interpolation=interp2)
+            display_bgr[y0:y0+fit_h, x0:x0+fit_w] = resized
+
+            # Convert for Tkinter display
+            rgb = cv2.cvtColor(display_bgr, cv2.COLOR_BGR2RGB)
             pil = Image.fromarray(rgb)
             self._tk_preview_img = ImageTk.PhotoImage(pil)
             self.preview_label.configure(image=self._tk_preview_img)
 
+        # ~30 FPS
         self.root.after(33, self.update_preview)
 
-    # ---------- countdown + flash + capture ----------
+    # =====================================================
+    # Countdown + flash + capture
+    # =====================================================
     def start_countdown_then_capture(self, seconds: int = 3):
+        """Run a countdown, flash, then capture in a worker thread."""
         if self._sequence_running:
             return
         if not self._capture_lock.acquire(blocking=False):
@@ -878,6 +1252,10 @@ class CameraAppGUI:
         self.root.after(int(seconds * 1000 + FLASH_DURATION_S * 1000), start_capture_thread)
 
     def capture_flow(self):
+        """Capture the last camera frame, burn overlays into the SAVED photo, upload to Drive, generate QR, update UI.
+
+        Note: the LIVE preview stays clean; the decorative overlays (frame/logo) are applied ONLY to the photo that is saved/uploaded.
+        """
         try:
             with self._frame_lock:
                 frame = None if self._last_frame_bgr is None else self._last_frame_bgr.copy()
@@ -886,17 +1264,19 @@ class CameraAppGUI:
 
             if FLIP_CAPTURE:
                 frame = apply_flip(frame, FLIP_MODE)
+            # IMPORTANT: burn overlays (frame/logo) into the SAVED/UPLOADED photo.
+            # The LIVE preview remains clean.
+            if CAPTURE_APPLY_OVERLAYS:
+                frame = apply_frame_and_logo(frame)
 
-            frame = apply_frame_and_logo(frame)
             if self.storage is None:
                 self._logger.error("Capture demandée mais Google Drive n'est pas initialisé (storage=None).")
                 return
-            
+
             try:
                 local_path, url = self.storage.save_frame_and_upload(frame)
             except Exception:
                 self._logger.exception("Upload vers Drive a échoué")
-                # log Sheets (si dispo)
                 if self.sheets_logger is not None:
                     try:
                         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -904,7 +1284,7 @@ class CameraAppGUI:
                     except Exception:
                         self._logger.exception("Sheets append_row failed (UPLOAD_ERROR)")
                 return
-            
+
             if not url:
                 self._logger.error("Upload OK mais URL vide (url='').")
                 if self.sheets_logger is not None:
@@ -914,7 +1294,7 @@ class CameraAppGUI:
                     except Exception:
                         self._logger.exception("Sheets append_row failed (URL_EMPTY)")
                 return
-            
+
             self._logger.info("URL reçue: %s", url)
             if self.sheets_logger is not None:
                 try:
@@ -922,9 +1302,10 @@ class CameraAppGUI:
                     self.sheets_logger.append_row([ts, "UPLOAD_OK", local_path, url, ""])
                 except Exception:
                     self._logger.exception("Sheets append_row failed (UPLOAD_OK)")
-            
+
+            # Generate QR with the current UI QR size (keeps it readable)
             try:
-                qr_img = make_qr_image(url, size=260)
+                qr_img = make_qr_image(url, size=int(self.qr_size))
             except Exception:
                 self._logger.exception("Conversion URL -> QR a échoué")
                 if self.sheets_logger is not None and SHEETS_LOG_QR_EVENTS:
@@ -934,20 +1315,19 @@ class CameraAppGUI:
                     except Exception:
                         self._logger.exception("Sheets append_row failed (QR_ERROR)")
                 return
-            
-            self._logger.info("QR généré (URL -> QR) et prêt à être affiché.")
+
             if self.sheets_logger is not None and SHEETS_LOG_QR_EVENTS:
                 try:
                     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     self.sheets_logger.append_row([ts, "QR_OK", local_path, url, ""])
                 except Exception:
                     self._logger.exception("Sheets append_row failed (QR_OK)")
-            # Désactive ROI après capture
+
+            # Disable ROI temporarily after capture (avoid retrigger)
             self._roi_disabled_until = time.monotonic() + ROI_DISABLE_AFTER_CAPTURE_S
 
-            # Push QR dans l’historique
+            # Push QR to history (UI thread)
             self.ui(lambda: self.push_qr_to_history(qr_img))
-            self._logger.debug('QR push dans l\'historique UI.')
 
         finally:
             self._sequence_running = False
@@ -956,6 +1336,9 @@ class CameraAppGUI:
             except Exception:
                 pass
 
+    # =====================================================
+    # Shutdown
+    # =====================================================
     def on_close(self):
         self._running = False
         try:
@@ -963,7 +1346,8 @@ class CameraAppGUI:
         except Exception:
             pass
         try:
-            self.storage.close()
+            if self.storage:
+                self.storage.close()
         except Exception:
             pass
         try:
@@ -975,7 +1359,6 @@ class CameraAppGUI:
         self._logger.info("Entrée dans mainloop (la fenêtre doit rester ouverte).")
         self.root.mainloop()
         self._logger.info("Sortie de mainloop (fenêtre fermée).")
-
 
 if __name__ == "__main__":
     setup_logging()
