@@ -1,0 +1,55 @@
+2025-12-28 14:33:34 - Starting Camera → Drive → QR application.
+2025-12-28 14:33:36 - Camera resolution requested=640x480 actual=640x480
+2025-12-28 14:33:36 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2025-12-28 14:33:37 - UI initialized.
+2025-12-28 14:33:37 - Entering Tk mainloop (window stays open).
+2025-12-28 14:33:37 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2025-12-28 14:33:39 - ROI baseline is ready.
+2025-12-28 14:33:48 - FRAME_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\frame.png
+2025-12-28 14:33:48 - LOGO_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\logo.png
+2025-12-28 14:33:48 - Capture requested but storage is None (Drive not initialized).
+2025-12-28 14:33:50 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2025-12-28 14:34:05 - FRAME_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\frame.png
+2025-12-28 14:34:05 - LOGO_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\logo.png
+2025-12-28 14:34:05 - Capture requested but storage is None (Drive not initialized).
+2025-12-28 14:34:09 - FRAME_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\frame.png
+2025-12-28 14:34:09 - LOGO_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\logo.png
+2025-12-28 14:34:09 - Capture requested but storage is None (Drive not initialized).
+2025-12-28 14:34:12 - FRAME_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\frame.png
+2025-12-28 14:34:12 - LOGO_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\logo.png
+2025-12-28 14:34:12 - Capture requested but storage is None (Drive not initialized).
+2025-12-28 14:34:16 - FRAME_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\frame.png
+2025-12-28 14:34:16 - LOGO_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\logo.png
+2025-12-28 14:34:16 - Capture requested but storage is None (Drive not initialized).
+2025-12-28 14:34:20 - FRAME_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\frame.png
+2025-12-28 14:34:20 - LOGO_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\logo.png
+2025-12-28 14:34:20 - Capture requested but storage is None (Drive not initialized).
+2025-12-28 14:34:22 - Exited Tk mainloop (window closed).
+2025-12-28 14:35:49 - Starting Camera → Drive → QR application.
+2025-12-28 14:35:50 - Camera resolution requested=640x480 actual=640x480
+2025-12-28 14:35:50 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2025-12-28 14:35:50 - UI initialized.
+2025-12-28 14:35:50 - Entering Tk mainloop (window stays open).
+2025-12-28 14:35:50 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2025-12-28 14:35:52 - ROI baseline is ready.
+2025-12-28 14:36:06 - FRAME_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\frame.png
+2025-12-28 14:36:06 - LOGO_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\logo.png
+2025-12-28 14:36:06 - Capture requested but storage is None (Drive not initialized).
+2025-12-28 14:36:08 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2025-12-28 14:36:18 - Exited Tk mainloop (window closed).
