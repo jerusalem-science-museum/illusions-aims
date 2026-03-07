@@ -71,10 +71,10 @@ QR_ANIM_DELAY_MS = 15
 
 # ---------- GOOGLE DRIVE (OAuth "installed") ----------
 # Put your OAuth client JSON here (type: installed)
-BASIC_PATH = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
+BASIC_PATH = os.path.abspath(os.path.realpath(__file__))
 sys.path.append(BASIC_PATH)
 
-KEYS_PATH = os.path.join(BASIC_PATH, "keys")
+KEYS_PATH = os.path.join(BASIC_PATH, "token_n_oauth")
 OAUTH_CLIENT_JSON = os.path.join(KEYS_PATH, "oauth_client.json")
 
 # Token created automatically on first login (DO NOT COMMIT)

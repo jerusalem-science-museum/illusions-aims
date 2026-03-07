@@ -43,13 +43,13 @@ CAPTURE_DIR = "captures"
 BASIC_PATH = os.path.abspath(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.append(BASIC_PATH)
 
-KEYS_PATH_CANDIDATES = [
-    os.path.join(BASIC_PATH, 'keys', 'arad'),
-    os.path.join(os.path.dirname(os.path.realpath(__file__)), 'keys', 'arad'),
-]
 
-KEYS_PATH = next((p for p in KEYS_PATH_CANDIDATES if os.path.isdir(p)), KEYS_PATH_CANDIDATES[0])
+KEYS_PATH = os.path.join(BASIC_PATH, 'keys', 'arad')
 GOOGLE_SERVICE_ACCOUNT_JSON = os.path.join(KEYS_PATH, 'logger-176517.json')
+
+#KEYS_PATH = os.path.join(BASIC_PATH, 'keys', 'nathan')
+#GOOGLE_SERVICE_ACCOUNT_JSON = os.path.join(KEYS_PATH, 'cameraqr-489411.json')
+
 
 GOOGLE_DRIVE_FOLDER_ID = None
 GOOGLE_DRIVE_MAKE_PUBLIC = True

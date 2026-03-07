@@ -6,9 +6,9 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import ttk
+from PIL import Image, ImageTk
 
 from constant import *
 from log import get_logger

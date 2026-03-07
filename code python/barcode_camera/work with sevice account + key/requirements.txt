@@ -1,0 +1,8 @@
+opencv-python
+numpy
+Pillow
+qrcode[pil]
+google-api-python-client
+google-auth
+google-auth-httplib2
+pyshorteners

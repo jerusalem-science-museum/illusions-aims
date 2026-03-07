@@ -53,3 +53,429 @@ FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_
 2025-12-28 14:36:06 - Capture requested but storage is None (Drive not initialized).
 2025-12-28 14:36:08 - Layout updated: window=1540x845 preview=640x480 qr_size=150
 2025-12-28 14:36:18 - Exited Tk mainloop (window closed).
+2026-03-06 01:05:53 - Starting Camera → Drive → QR application.
+2026-03-06 01:05:55 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 01:05:55 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 01:05:57 - UI initialized.
+2026-03-06 01:05:57 - Entering Tk mainloop (window stays open).
+2026-03-06 01:05:57 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 01:05:59 - ROI baseline is ready.
+2026-03-06 01:06:12 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 01:06:24 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 01:06:26 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 01:06:28 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 01:06:29 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 01:06:34 - Exited Tk mainloop (window closed).
+2026-03-06 01:07:09 - Starting Camera → Drive → QR application.
+2026-03-06 01:07:10 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 01:07:10 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 01:07:10 - UI initialized.
+2026-03-06 01:07:10 - Entering Tk mainloop (window stays open).
+2026-03-06 01:07:10 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 01:07:12 - ROI baseline is ready.
+2026-03-06 01:07:19 - FRAME_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\frame.png
+2026-03-06 01:07:19 - LOGO_PNG not found: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\pic\logo.png
+2026-03-06 01:07:19 - Capture requested but storage is None (Drive not initialized).
+2026-03-06 01:07:32 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 01:07:36 - Exited Tk mainloop (window closed).
+2026-03-06 01:10:55 - Starting Camera → Drive → QR application.
+2026-03-06 01:10:57 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 01:10:57 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 01:10:57 - UI initialized.
+2026-03-06 01:10:57 - Entering Tk mainloop (window stays open).
+2026-03-06 01:10:57 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 01:10:59 - ROI baseline is ready.
+2026-03-06 01:11:07 - Capture requested but storage is None (Drive not initialized).
+2026-03-06 01:11:11 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 01:11:18 - Exited Tk mainloop (window closed).
+2026-03-06 01:30:14 - Starting Camera → Drive → QR application.
+2026-03-06 01:30:16 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 01:30:16 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 01:30:16 - UI initialized.
+2026-03-06 01:30:16 - Entering Tk mainloop (window stays open).
+2026-03-06 01:30:16 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 01:30:18 - ROI baseline is ready.
+2026-03-06 01:30:20 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 01:30:22 - Exited Tk mainloop (window closed).
+2026-03-06 02:49:11 - Starting Camera → Drive → QR application.
+2026-03-06 02:49:13 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 02:49:13 - Drive uploader NOT initialized (missing JSON or google_upload unavailable).
+2026-03-06 02:49:14 - UI initialized.
+2026-03-06 02:49:14 - Entering Tk mainloop (window stays open).
+2026-03-06 02:49:14 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 02:49:16 - ROI baseline is ready.
+2026-03-06 02:49:17 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 02:49:19 - Exited Tk mainloop (window closed).
+2026-03-06 02:54:25 - Starting Camera → Drive → QR application.
+2026-03-06 02:54:26 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 02:54:27 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+        service_account_json=str(sa_json),
+    ...<3 lines>...
+        shortener_backend=shortener_backend,
+    )
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 02:54:27 - UI initialized.
+2026-03-06 02:54:27 - Entering Tk mainloop (window stays open).
+2026-03-06 02:54:27 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 02:54:29 - ROI baseline is ready.
+2026-03-06 02:54:41 - Capture requested but storage is None (Drive not initialized).
+2026-03-06 02:54:48 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 02:54:52 - Exited Tk mainloop (window closed).
+2026-03-06 02:55:15 - Starting Camera → Drive → QR application.
+2026-03-06 02:55:17 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 02:55:17 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+        service_account_json=str(sa_json),
+    ...<3 lines>...
+        shortener_backend=shortener_backend,
+    )
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 02:55:17 - UI initialized.
+2026-03-06 02:55:17 - Entering Tk mainloop (window stays open).
+2026-03-06 02:55:17 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 02:55:19 - ROI baseline is ready.
+2026-03-06 02:55:25 - Capture requested but storage is None (Drive not initialized).
+2026-03-06 02:55:54 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 02:56:02 - Exited Tk mainloop (window closed).
+2026-03-06 02:59:20 - Starting Camera → Drive → QR application.
+2026-03-06 02:59:21 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 02:59:21 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+        service_account_json=str(sa_json),
+    ...<3 lines>...
+        shortener_backend=shortener_backend,
+    )
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 02:59:21 - UI initialized.
+2026-03-06 02:59:21 - Entering Tk mainloop (window stays open).
+2026-03-06 02:59:22 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 02:59:23 - ROI baseline is ready.
+2026-03-06 02:59:28 - Capture requested but storage is None (Drive not initialized).
+2026-03-06 02:59:45 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 02:59:48 - Exited Tk mainloop (window closed).
+2026-03-06 03:00:22 - Starting Camera → Drive → QR application.
+2026-03-06 03:00:23 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 03:00:24 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+        service_account_json=str(sa_json),
+    ...<3 lines>...
+        shortener_backend=shortener_backend,
+    )
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 03:00:24 - UI initialized.
+2026-03-06 03:00:24 - Entering Tk mainloop (window stays open).
+2026-03-06 03:00:24 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 03:00:26 - ROI baseline is ready.
+2026-03-06 03:00:31 - Capture requested but storage is None (Drive not initialized).
+2026-03-06 03:00:36 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 03:00:51 - Exited Tk mainloop (window closed).
+2026-03-06 03:02:37 - Starting Camera → Drive → QR application.
+2026-03-06 03:02:39 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 03:02:39 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+        service_account_json=str(sa_json),
+    ...<3 lines>...
+        shortener_backend=shortener_backend,
+    )
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 03:02:39 - UI initialized.
+2026-03-06 03:02:39 - Entering Tk mainloop (window stays open).
+2026-03-06 03:02:40 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 03:02:42 - ROI baseline is ready.
+2026-03-06 03:02:48 - Capture requested but storage is None (Drive not initialized).
+2026-03-06 03:02:51 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 03:03:01 - Exited Tk mainloop (window closed).
+2026-03-06 03:08:03 - Starting Camera → Drive → QR application.
+2026-03-06 03:08:05 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 03:08:05 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 03:08:05 - UI initialized.
+2026-03-06 03:08:05 - Entering Tk mainloop (window stays open).
+2026-03-06 03:08:05 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 03:08:07 - ROI baseline is ready.
+2026-03-06 03:08:11 - Capture requested but storage is None (Drive not initialized).
+2026-03-06 03:08:13 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 03:08:19 - Exited Tk mainloop (window closed).
+2026-03-06 03:10:30 - Starting Camera → Drive → QR application.
+2026-03-06 03:10:35 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 03:10:37 - Drive uploader initialization failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 186, in _init_services
+    uploader = GoogleDriveUploader(
+        service_account_json=str(sa_json),
+    ...<3 lines>...
+        shortener_backend=shortener_backend,
+    )
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 31, in __init__
+    self._init_drive()
+    ~~~~~~~~~~~~~~~~^^
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 46, in _init_drive
+    raise FileNotFoundError(f"Service account JSON introuvable: {self.service_account_json}")
+FileNotFoundError: Service account JSON introuvable: C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\keys\arad\logger-176517.json
+2026-03-06 03:10:38 - UI initialized.
+2026-03-06 03:10:38 - Entering Tk mainloop (window stays open).
+2026-03-06 03:10:38 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 03:10:40 - ROI baseline is ready.
+2026-03-06 03:10:49 - Capture requested but storage is None (Drive not initialized).
+2026-03-06 03:10:57 - Capture requested but storage is None (Drive not initialized).
+2026-03-06 03:11:02 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 03:11:34 - Exited Tk mainloop (window closed).
+2026-03-06 12:49:33 - Starting Camera → Drive → QR application.
+2026-03-06 12:49:35 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 12:49:35 - Drive uploader initialized (folder_id=None).
+2026-03-06 12:49:35 - CaptureStorage initialized.
+2026-03-06 12:49:36 - UI initialized.
+2026-03-06 12:49:36 - Entering Tk mainloop (window stays open).
+2026-03-06 12:49:36 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 12:49:38 - ROI baseline is ready.
+2026-03-06 12:49:49 - Drive URL received: https://drive.google.com/file/d/12mn3XLugUTwRtRZeQ2A3lmltd7GXlKEt/view?usp=drivesdk
+2026-03-06 12:50:35 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 12:50:37 - Exited Tk mainloop (window closed).
+2026-03-06 13:56:51 - Starting Camera → Drive → QR application.
+2026-03-06 13:56:53 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 13:56:53 - Drive uploader initialized (folder_id=None).
+2026-03-06 13:56:53 - CaptureStorage initialized.
+2026-03-06 13:56:53 - UI initialized.
+2026-03-06 13:56:53 - Entering Tk mainloop (window stays open).
+2026-03-06 13:56:53 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 13:56:55 - ROI baseline is ready.
+2026-03-06 13:57:02 - Drive upload failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 416, in capture_flow
+    local_name, url = self.storage.save_frame_and_upload(frame_bgr)
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 234, in save_frame_and_upload
+    url = self.uploader.upload_and_get_url(tmp_path)
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 70, in upload_and_get_url
+    created = self._drive.files().create(body=metadata, media_body=media, fields="id").execute()
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\_helpers.py", line 130, in positional_wrapper
+    return wrapped(*args, **kwargs)
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\http.py", line 902, in execute
+    _, body = self.next_chunk(http=http, num_retries=num_retries)
+              ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\_helpers.py", line 130, in positional_wrapper
+    return wrapped(*args, **kwargs)
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\http.py", line 1022, in next_chunk
+    raise ResumableUploadError(resp, content)
+googleapiclient.errors.ResumableUploadError: <HttpError 403 when requesting None returned "Google Drive API has not been used in project 775973445605 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=775973445605 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.". Details: "[{'message': 'Google Drive API has not been used in project 775973445605 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=775973445605 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.', 'domain': 'usageLimits', 'reason': 'accessNotConfigured', 'extendedHelp': 'https://console.developers.google.com'}]">
+2026-03-06 13:57:18 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 13:57:22 - Exited Tk mainloop (window closed).
+2026-03-06 14:00:59 - Starting Camera → Drive → QR application.
+2026-03-06 14:01:00 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 14:01:01 - Drive uploader initialized (folder_id=None).
+2026-03-06 14:01:01 - CaptureStorage initialized.
+2026-03-06 14:01:01 - UI initialized.
+2026-03-06 14:01:01 - Entering Tk mainloop (window stays open).
+2026-03-06 14:01:01 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 14:01:03 - ROI baseline is ready.
+2026-03-06 14:01:09 - Drive upload failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 416, in capture_flow
+    local_name, url = self.storage.save_frame_and_upload(frame_bgr)
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 234, in save_frame_and_upload
+    url = self.uploader.upload_and_get_url(tmp_path)
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 70, in upload_and_get_url
+    created = self._drive.files().create(body=metadata, media_body=media, fields="id").execute()
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\_helpers.py", line 130, in positional_wrapper
+    return wrapped(*args, **kwargs)
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\http.py", line 902, in execute
+    _, body = self.next_chunk(http=http, num_retries=num_retries)
+              ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\_helpers.py", line 130, in positional_wrapper
+    return wrapped(*args, **kwargs)
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\http.py", line 1022, in next_chunk
+    raise ResumableUploadError(resp, content)
+googleapiclient.errors.ResumableUploadError: <HttpError 403 when requesting None returned "Google Drive API has not been used in project 775973445605 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=775973445605 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.". Details: "[{'message': 'Google Drive API has not been used in project 775973445605 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=775973445605 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.', 'domain': 'usageLimits', 'reason': 'accessNotConfigured', 'extendedHelp': 'https://console.developers.google.com'}]">
+2026-03-06 14:01:23 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 14:01:25 - Exited Tk mainloop (window closed).
+2026-03-06 14:02:43 - Starting Camera → Drive → QR application.
+2026-03-06 14:02:44 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 14:02:45 - Drive uploader initialized (folder_id=None).
+2026-03-06 14:02:45 - CaptureStorage initialized.
+2026-03-06 14:02:45 - UI initialized.
+2026-03-06 14:02:45 - Entering Tk mainloop (window stays open).
+2026-03-06 14:02:45 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 14:02:47 - ROI baseline is ready.
+2026-03-06 14:02:56 - Drive URL received: https://drive.google.com/file/d/1LjuEI9Rb_9mLCsv9TLlghKYyIUy5eysl/view?usp=drivesdk
+2026-03-06 14:03:01 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 14:03:04 - Exited Tk mainloop (window closed).
+2026-03-06 14:15:37 - Starting Camera → Drive → QR application.
+2026-03-06 14:15:39 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 14:15:39 - Drive uploader initialized (folder_id=None).
+2026-03-06 14:15:39 - CaptureStorage initialized.
+2026-03-06 14:15:42 - Sheets logger initialized (tab=pi04).
+2026-03-06 14:15:42 - UI initialized.
+2026-03-06 14:15:42 - Entering Tk mainloop (window stays open).
+2026-03-06 14:15:42 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 14:15:44 - ROI baseline is ready.
+2026-03-06 14:15:53 - Drive URL received: https://drive.google.com/file/d/1Y6kvncEUwOd3MkWpkbtU0zkkDsEWnOtw/view?usp=drivesdk
+2026-03-06 14:16:15 - Drive URL received: https://drive.google.com/file/d/1xaDyudgHOreT6SOQ50A4GzS3kXvfobUv/view?usp=drivesdk
+2026-03-06 14:16:17 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 14:16:20 - Exited Tk mainloop (window closed).
+2026-03-06 14:20:36 - Starting Camera → Drive → QR application.
+2026-03-06 14:20:37 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 14:20:38 - Drive uploader initialized (folder_id=None).
+2026-03-06 14:20:38 - CaptureStorage initialized.
+2026-03-06 14:20:38 - UI initialized.
+2026-03-06 14:20:38 - Entering Tk mainloop (window stays open).
+2026-03-06 14:20:38 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 14:20:40 - ROI baseline is ready.
+2026-03-06 14:20:48 - Drive upload failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 95, in upload_and_get_url
+    ).execute()
+      ~~~~~~~^^
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\_helpers.py", line 130, in positional_wrapper
+    return wrapped(*args, **kwargs)
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\http.py", line 902, in execute
+    _, body = self.next_chunk(http=http, num_retries=num_retries)
+              ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\_helpers.py", line 130, in positional_wrapper
+    return wrapped(*args, **kwargs)
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\http.py", line 1022, in next_chunk
+    raise ResumableUploadError(resp, content)
+googleapiclient.errors.ResumableUploadError: <HttpError 403 when requesting None returned "Google Drive API has not been used in project 775973445605 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=775973445605 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.". Details: "[{'message': 'Google Drive API has not been used in project 775973445605 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=775973445605 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.', 'domain': 'usageLimits', 'reason': 'accessNotConfigured', 'extendedHelp': 'https://console.developers.google.com'}]">
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 416, in capture_flow
+    local_name, url = self.storage.save_frame_and_upload(frame_bgr)
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 278, in save_frame_and_upload
+    url = self.uploader.upload_and_get_url(tmp_path)
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 100, in upload_and_get_url
+    raise RuntimeError(f"Google Drive upload failed: {e}") from e
+RuntimeError: Google Drive upload failed: <HttpError 403 when requesting None returned "Google Drive API has not been used in project 775973445605 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=775973445605 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.". Details: "[{'message': 'Google Drive API has not been used in project 775973445605 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=775973445605 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.', 'domain': 'usageLimits', 'reason': 'accessNotConfigured', 'extendedHelp': 'https://console.developers.google.com'}]">
+2026-03-06 14:21:03 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 14:21:06 - Exited Tk mainloop (window closed).
+2026-03-06 14:26:30 - Starting Camera → Drive → QR application.
+2026-03-06 14:26:31 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 14:26:31 - Drive uploader initialized (folder_id=None).
+2026-03-06 14:26:31 - CaptureStorage initialized.
+2026-03-06 14:26:31 - UI initialized.
+2026-03-06 14:26:31 - Entering Tk mainloop (window stays open).
+2026-03-06 14:26:31 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 14:26:33 - ROI baseline is ready.
+2026-03-06 14:26:41 - Drive upload failed.
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 95, in upload_and_get_url
+    ).execute()
+      ~~~~~~~^^
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\_helpers.py", line 130, in positional_wrapper
+    return wrapped(*args, **kwargs)
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\http.py", line 902, in execute
+    _, body = self.next_chunk(http=http, num_retries=num_retries)
+              ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\_helpers.py", line 130, in positional_wrapper
+    return wrapped(*args, **kwargs)
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\http.py", line 1093, in next_chunk
+    return self._process_response(resp, content)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Users\natou\AppData\Local\Programs\Python\Python313\Lib\site-packages\googleapiclient\http.py", line 1124, in _process_response
+    raise HttpError(resp, content, uri=self.uri)
+googleapiclient.errors.HttpError: <HttpError 403 when requesting https://www.googleapis.com/upload/drive/v3/files?fields=id&alt=json&uploadType=resumable returned "Service Accounts do not have storage quota. Leverage shared drives (https://developers.google.com/workspace/drive/api/guides/about-shareddrives), or use OAuth delegation (http://support.google.com/a/answer/7281227) instead.". Details: "[{'message': 'Service Accounts do not have storage quota. Leverage shared drives (https://developers.google.com/workspace/drive/api/guides/about-shareddrives), or use OAuth delegation (http://support.google.com/a/answer/7281227) instead.', 'domain': 'usageLimits', 'reason': 'storageQuotaExceeded'}]">
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\main.py", line 416, in capture_flow
+    local_name, url = self.storage.save_frame_and_upload(frame_bgr)
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 278, in save_frame_and_upload
+    url = self.uploader.upload_and_get_url(tmp_path)
+  File "C:\Users\natou\Desktop\git_Musee\Illusions\aims\code python\barcode_camera\work with sevice account + key\V3\google_upload.py", line 100, in upload_and_get_url
+    raise RuntimeError(f"Google Drive upload failed: {e}") from e
+RuntimeError: Google Drive upload failed: <HttpError 403 when requesting https://www.googleapis.com/upload/drive/v3/files?fields=id&alt=json&uploadType=resumable returned "Service Accounts do not have storage quota. Leverage shared drives (https://developers.google.com/workspace/drive/api/guides/about-shareddrives), or use OAuth delegation (http://support.google.com/a/answer/7281227) instead.". Details: "[{'message': 'Service Accounts do not have storage quota. Leverage shared drives (https://developers.google.com/workspace/drive/api/guides/about-shareddrives), or use OAuth delegation (http://support.google.com/a/answer/7281227) instead.', 'domain': 'usageLimits', 'reason': 'storageQuotaExceeded'}]">
+2026-03-06 14:26:50 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 14:26:52 - Exited Tk mainloop (window closed).
+2026-03-06 14:34:16 - Starting Camera → Drive → QR application.
+2026-03-06 14:34:17 - Camera resolution requested=640x480 actual=640x480
+2026-03-06 14:34:18 - Drive uploader initialized (folder_id=None).
+2026-03-06 14:34:18 - CaptureStorage initialized.
+2026-03-06 14:34:20 - Sheets logger initialized (tab=pi04).
+2026-03-06 14:34:20 - UI initialized.
+2026-03-06 14:34:20 - Entering Tk mainloop (window stays open).
+2026-03-06 14:34:21 - Layout updated: window=1536x864 preview=640x480 qr_size=150
+2026-03-06 14:34:22 - ROI baseline is ready.
+2026-03-06 14:34:36 - Drive URL received: https://drive.google.com/file/d/1q9DRsCWzDXc0WGTxNpgbwpxynJl-iT6o/view?usp=drivesdk
+2026-03-06 14:34:56 - Drive URL received: https://drive.google.com/file/d/1FrvIaebLzD7FbBMRnghwJQt1uoOr1bFi/view?usp=drivesdk
+2026-03-06 14:35:17 - Drive URL received: https://drive.google.com/file/d/1ek1IBH4oepZ_ZbKRJaJmXJ8vtvztCyM7/view?usp=drivesdk
+2026-03-06 14:35:30 - Layout updated: window=1540x845 preview=640x480 qr_size=150
+2026-03-06 14:35:33 - Exited Tk mainloop (window closed).
