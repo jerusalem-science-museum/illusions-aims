@@ -492,3 +492,37 @@ RuntimeError: Google Drive upload failed: <HttpError 403 when requesting https:/
 2026-03-08 09:08:54 - Drive URL received: https://drive.google.com/file/d/1HAM1RJJBZtgkCOw7wXdihs-toWjhPR-d/view?usp=drivesdk
 2026-03-08 09:08:58 - Layout updated: window=1924x1061 preview=640x480 qr_size=150
 2026-03-08 09:09:00 - Exited Tk mainloop (window closed).
+2026-03-12 16:17:53 - Starting Camera → Drive → QR application.
+2026-03-12 16:17:55 - Camera resolution requested=640x480 actual=640x480
+2026-03-12 16:17:56 - Drive uploader initialized (folder_id=None).
+2026-03-12 16:17:56 - CaptureStorage initialized.
+2026-03-12 16:17:59 - Sheets logger initialized (tab=pi04).
+2026-03-12 16:17:59 - UI initialized.
+2026-03-12 16:17:59 - Entering Tk mainloop (window stays open).
+2026-03-12 16:17:59 - Layout updated: window=1920x1080 preview=640x480 qr_size=150
+2026-03-12 16:18:01 - ROI baseline is ready.
+2026-03-12 16:18:23 - Drive URL received: https://drive.google.com/file/d/1kW0g__ak6Q6S5BrFifeqQvzmHj1jeNuE/view?usp=drivesdk
+2026-03-12 16:19:29 - Drive URL received: https://drive.google.com/file/d/1aiMTPtc5uLHRTdipo8vW-FbK-EHz83g2/view?usp=drivesdk
+2026-03-12 16:20:44 - Layout updated: window=1924x1061 preview=640x480 qr_size=150
+2026-03-12 16:20:47 - Exited Tk mainloop (window closed).
+2026-03-12 19:50:08 - Starting Camera → Drive → QR application.
+2026-03-12 19:50:10 - Camera actual=640x480 fps=0.0
+2026-03-12 19:50:11 - Drive uploader initialized (folder_id=None).
+2026-03-12 19:50:11 - CaptureStorage initialized.
+2026-03-12 19:50:13 - Sheets logger initialized (tab=pi04).
+2026-03-12 19:50:13 - UI initialized.
+2026-03-12 19:50:13 - Entering Tk mainloop (window stays open).
+2026-03-12 19:50:14 - Layout updated: window=1920x1080 preview=640x480 qr_size=150
+2026-03-12 19:50:22 - Layout updated: window=1920x654 preview=640x480 qr_size=150
+2026-03-12 19:50:28 - Exited Tk mainloop (window closed).
+2026-03-12 20:48:36 - Starting Camera → Drive → QR application.
+2026-03-12 20:48:38 - Camera actual=640x480 fps=0.0
+2026-03-12 20:48:39 - Drive uploader initialized (folder_id=None).
+2026-03-12 20:48:39 - CaptureStorage initialized.
+2026-03-12 20:48:41 - Sheets logger initialized (tab=pi04).
+2026-03-12 20:48:41 - UI initialized.
+2026-03-12 20:48:41 - Entering Tk mainloop (window stays open).
+2026-03-12 20:48:41 - Layout updated: window=1920x1080 preview=640x480 qr_size=150
+2026-03-12 20:48:43 - ROI baseline is ready.
+2026-03-12 20:48:51 - Layout updated: window=1924x1061 preview=640x480 qr_size=150
+2026-03-12 20:48:55 - Exited Tk mainloop (window closed).

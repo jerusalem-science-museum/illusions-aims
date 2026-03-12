@@ -3,6 +3,7 @@ import datetime
 import time
 import queue
 from typing import Optional
+import sys
 
 import cv2
 import numpy as np
@@ -131,34 +132,57 @@ class CameraAppGUI:
     # Init camera
     # =====================================================
     def _init_camera(self):
-        backend = None
+
         if sys.platform.startswith("win"):
             backend = cv2.CAP_DSHOW
         else:
-            backend = getattr(cv2, "CAP_V4L2", None)
+            backend = cv2.CAP_V4L2
 
-        if backend is None:
-            self.cap = cv2.VideoCapture(CAM_INDEX)
-        else:
-            self.cap = cv2.VideoCapture(CAM_INDEX, backend)
-
-        try:
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        except Exception:
-            pass
+        self.cap = cv2.VideoCapture(CAM_INDEX, backend)
 
         if not self.cap.isOpened():
             raise RuntimeError("Cannot open the camera. Try changing CAM_INDEX (0/1/2).")
 
-        desired_w = int(globals().get("FRAME_WIDTH", globals().get("CAMERA_RESOLUTION", (1280, 720))[0]))
-        desired_h = int(globals().get("FRAME_HEIGHT", globals().get("CAMERA_RESOLUTION", (1280, 720))[1]))
-
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, desired_w)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, desired_h)
+        # Très important pour coller à ffplay
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        #self.cap.set(cv2.CAP_PROP_FPS, 25)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
         actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        log.info("Camera resolution requested=%sx%s actual=%sx%s", desired_w, desired_h, actual_w, actual_h)
+        actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
+
+        log.info("Camera actual=%sx%s fps=%s", actual_w, actual_h, actual_fps)
+        # backend = None
+        # if sys.platform.startswith("win"):
+        #     backend = cv2.CAP_DSHOW
+        # else:
+        #     backend = getattr(cv2, "CAP_V4L2", None)
+        #
+        # if backend is None:
+        #     self.cap = cv2.VideoCapture(CAM_INDEX)
+        # else:
+        #     self.cap = cv2.VideoCapture(CAM_INDEX, backend)
+        #
+        # try:
+        #     self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # except Exception:
+        #     pass
+        #
+        # if not self.cap.isOpened():
+        #     raise RuntimeError("Cannot open the camera. Try changing CAM_INDEX (0/1/2).")
+        #
+        # desired_w = int(globals().get("FRAME_WIDTH", globals().get("CAMERA_RESOLUTION", (1280, 720))[0]))
+        # desired_h = int(globals().get("FRAME_HEIGHT", globals().get("CAMERA_RESOLUTION", (1280, 720))[1]))
+        #
+        # self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, desired_w)
+        # self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, desired_h)
+        #
+        # actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        # actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # log.info("Camera resolution requested=%sx%s actual=%sx%s", desired_w, desired_h, actual_w, actual_h)
 
     # =====================================================
     # Init services (Drive + Sheets)
@@ -361,8 +385,7 @@ class CameraAppGUI:
             self._tk_preview_img = ImageTk.PhotoImage(pil)
             self.preview_label.configure(image=self._tk_preview_img)
 
-        self.root.after(33, self.update_preview)
-
+        self.root.after(15, self.update_preview)
     # =====================================================
     # Countdown + flash + capture (countdown moved to graphics.py)
     # =====================================================
