@@ -1,5 +1,0 @@
-2026-03-22 20:37:28 - Camera opened. requested=640x480 actual=640x480 fps=30.0 fourcc=
-2026-03-22 20:37:29 - Drive uploader initialized (folder_id=None).
-2026-03-22 20:37:29 - CaptureStorage initialized.
-2026-03-22 20:37:31 - Sheets logger initialized (tab=pi04).
-2026-03-22 20:37:31 - Starting terminal camera application (ffplay backend, no Tkinter).
