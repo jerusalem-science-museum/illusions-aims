@@ -38,18 +38,24 @@ class CameraGrabber:
     """Continuously read the camera and keep only the latest frame."""
 
     def __init__(self, index: int = 0):
-        self.cap = cv2.VideoCapture(index)
+        backend = cv2.CAP_V4L2 if hasattr(cv2, "CAP_V4L2") else cv2.CAP_ANY
+        self.cap = cv2.VideoCapture(index, backend)
+        if not self.cap.isOpened() and backend != cv2.CAP_ANY:
+            self.cap = cv2.VideoCapture(index, cv2.CAP_ANY)
+
         if not self.cap.isOpened():
             raise RuntimeError(f"Cannot open the camera on index {index}.")
-
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FPS, 25)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(CAMERA_RESOLUTION[0]))
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(CAMERA_RESOLUTION[1]))
 
         self.lock = threading.Lock()
         self.last_frame = None
         self.running = True
+        self.read_fail_count = 0
+
+        self._safe_set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._safe_set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        self._safe_set(cv2.CAP_PROP_FPS, 25)
+        self._safe_set(cv2.CAP_PROP_FRAME_WIDTH, int(CAMERA_RESOLUTION[0]))
+        self._safe_set(cv2.CAP_PROP_FRAME_HEIGHT, int(CAMERA_RESOLUTION[1]))
 
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
@@ -69,13 +75,23 @@ class CameraGrabber:
             fourcc_str or "?",
         )
 
+    def _safe_set(self, prop: int, value) -> None:
+        try:
+            self.cap.set(prop, value)
+        except Exception:
+            pass
+
     def _reader(self):
         while self.running:
             ok, frame = self.cap.read()
             if ok and frame is not None:
+                self.read_fail_count = 0
                 with self.lock:
                     self.last_frame = frame
             else:
+                self.read_fail_count += 1
+                if self.read_fail_count in (1, 30, 120):
+                    log.warning("Camera read failed (%s). Retrying...", self.read_fail_count)
                 time.sleep(0.01)
 
     def get_latest_frame(self) -> Optional[np.ndarray]:
@@ -84,7 +100,8 @@ class CameraGrabber:
 
     def release(self):
         self.running = False
-        self.thread.join(timeout=1)
+        if self.thread.is_alive():
+            self.thread.join(timeout=1)
         self.cap.release()
 
 
@@ -96,12 +113,14 @@ class FFplayViewer:
         self.height = int(height)
         self.fps = int(fps)
         self.proc: Optional[subprocess.Popen] = None
+        self.closed_by_user = False
 
     def start(self):
         cmd = [
             "ffplay",
             "-loglevel",
-            "warning",
+            "error",
+            "-nostats",
             "-fs",
             "-fflags",
             "nobuffer",
@@ -121,18 +140,32 @@ class FFplayViewer:
             "-i",
             "-",
         ]
-        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        self.proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        self.closed_by_user = False
         log.info("ffplay started.")
 
-    def write(self, frame_rgb: np.ndarray):
+    def is_alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def write(self, frame_rgb: np.ndarray) -> bool:
         if self.proc is None or self.proc.stdin is None:
-            return
+            self.closed_by_user = True
+            return False
         if self.proc.poll() is not None:
-            raise RuntimeError("ffplay exited unexpectedly.")
+            self.closed_by_user = True
+            return False
         try:
             self.proc.stdin.write(frame_rgb.tobytes())
-        except BrokenPipeError as exc:
-            raise RuntimeError("ffplay pipe is closed.") from exc
+            return True
+        except (BrokenPipeError, OSError):
+            self.closed_by_user = True
+            return False
 
     def close(self):
         if self.proc and self.proc.stdin:
@@ -142,8 +175,9 @@ class FFplayViewer:
                 pass
         if self.proc:
             try:
-                self.proc.terminate()
-                self.proc.wait(timeout=2)
+                if self.proc.poll() is None:
+                    self.proc.terminate()
+                    self.proc.wait(timeout=2)
             except Exception:
                 try:
                     self.proc.kill()
@@ -414,15 +448,18 @@ class TerminalCameraApp:
             pass
 
     def run(self):
-        print("App démarrée sans Tkinter.")
-        print("q ou Esc dans ffplay pour fermer la fenêtre. Ctrl+C dans le terminal pour arrêter Python.")
-        print("Le ROI, le compte à rebours, le flash et la barre QR sont affichés dans ffplay.")
+        print("App run.")
+        print("q ou Esc in ffplay to close the windows. Ctrl+C in terminal to stop app.")
+        print("The ROI, the countdown, the flash and the QR will be screen in ffplay.")
 
         self.viewer.start()
         next_frame_time = time.monotonic()
 
         try:
             while self._running:
+                if not self.viewer.is_alive():
+                    log.info("ffplay is no longer running. Exiting cleanly.")
+                    break
                 frame_bgr = self.grabber.get_latest_frame()
                 if frame_bgr is None:
                     time.sleep(0.01)
@@ -460,7 +497,11 @@ class TerminalCameraApp:
                     small = apply_frame_and_logo(small)
 
                 display_rgb = self._compose_display(small)
-                self.viewer.write(display_rgb)
+                if not self.viewer.write(display_rgb):
+                    log.info("ffplay closed by user. Stopping application loop.")
+                    self.stop()
+                    break
+
                 self._maybe_start_capture_after_flash(now)
 
                 next_frame_time += self.frame_interval_s
@@ -484,5 +525,5 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    log.info("Starting terminal camera application (ffplay backend, no Tkinter).")
+    log.info("Starting terminal camera application (ffplay backend).")
     app.run()
