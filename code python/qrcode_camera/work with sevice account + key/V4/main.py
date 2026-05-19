@@ -424,6 +424,16 @@ class TerminalCameraApp:
             self._countdown_end = None
             self._flash_until = 0.0
             try:
+                self.roi_manager.on_capture_done(time.monotonic())
+            except Exception as e:
+                log.error(f"Error in on_capture_done: {e}")
+            try:
+                now = time.monotonic()
+                self.roi_manager.detector.reset_baseline(now)
+            except Exception as e:
+                log.error(f"Failed to reset ROI baseline in finally: {e}")
+            # -----------------------------------------------------------
+            try:
                 self._capture_lock.release()
             except Exception:
                 pass
@@ -449,7 +459,7 @@ class TerminalCameraApp:
 
     def run(self):
         print("App run.")
-        print("q ou Esc in ffplay to close the windows. Ctrl+C in terminal to stop app.")
+        print("Press q or Esc to close the ffplay window. Ctrl+C in terminal to stop app.")
         print("The ROI, the countdown, the flash and the QR will be screen in ffplay.")
 
         self.viewer.start()

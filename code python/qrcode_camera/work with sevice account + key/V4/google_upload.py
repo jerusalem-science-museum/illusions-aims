@@ -5,6 +5,7 @@ import tempfile
 from typing import Optional
 import cv2
 from google.oauth2 import service_account
+import pyshorteners
 
 
 # =========================================================
@@ -67,7 +68,6 @@ class GoogleDriveUploader:
         if not self.enable_shortener:
             return
         try:
-            import pyshorteners
             self._shortener = pyshorteners.Shortener()
             print("[INFO] URL shortener initialized.")
         except Exception as e:

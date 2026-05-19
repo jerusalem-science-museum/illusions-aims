@@ -6,3 +6,5 @@ code python/qrcode_camera/work with oauth + token/token_n_oauth/
 code python/qrcode_camera/work with oauth + token/captures/
 
 !code python/qrcode_camera/work with oauth + token/captures/.keep
+**/__pycache__/
+**/logs/
