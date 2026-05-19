@@ -91,7 +91,9 @@ class CameraGrabber:
             else:
                 self.read_fail_count += 1
                 if self.read_fail_count in (1, 30, 120):
-                    log.warning("Camera read failed (%s). Retrying...", self.read_fail_count)
+                    log.warning(
+                        "Camera read failed (%s). Retrying...", self.read_fail_count
+                    )
                 time.sleep(0.01)
 
     def get_latest_frame(self) -> Optional[np.ndarray]:
@@ -238,7 +240,9 @@ class TerminalCameraApp:
                 )
                 log.info("Drive uploader initialized (folder_id=%s).", folder_id)
             else:
-                log.warning("Drive uploader NOT initialized (missing JSON or google_upload unavailable).")
+                log.warning(
+                    "Drive uploader NOT initialized (missing JSON or google_upload unavailable)."
+                )
         except Exception:
             log.exception("Drive uploader initialization failed.")
 
@@ -255,7 +259,12 @@ class TerminalCameraApp:
         sheet_id_file = globals().get("GOOGLE_SHEETS_SPREADSHEET_ID_FILE", None)
         sheet_tab = str(globals().get("GOOGLE_SHEETS_WORKSHEET_NAME", "logs"))
 
-        if enable_sheets and not sheet_id and sheet_id_file and _read_first_nonempty_line is not None:
+        if (
+            enable_sheets
+            and not sheet_id
+            and sheet_id_file
+            and _read_first_nonempty_line is not None
+        ):
             raw = _read_first_nonempty_line(str(sheet_id_file))
             if raw and extract_spreadsheet_id is not None:
                 sheet_id = extract_spreadsheet_id(raw)
@@ -303,7 +312,9 @@ class TerminalCameraApp:
             self._capture_started = True
             threading.Thread(target=self.capture_flow, daemon=True).start()
 
-    def _apply_countdown_and_flash(self, frame_rgb: np.ndarray, now: float) -> np.ndarray:
+    def _apply_countdown_and_flash(
+        self, frame_rgb: np.ndarray, now: float
+    ) -> np.ndarray:
         if not self._sequence_running or self._countdown_end is None:
             return frame_rgb
 
@@ -317,8 +328,26 @@ class TerminalCameraApp:
             (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
             x = int((w - tw) / 2)
             y = int((h + th) / 2)
-            cv2.putText(frame_rgb, text, (x, y), font, scale, (0, 0, 0), thickness + 6, cv2.LINE_AA)
-            cv2.putText(frame_rgb, text, (x, y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            cv2.putText(
+                frame_rgb,
+                text,
+                (x, y),
+                font,
+                scale,
+                (0, 0, 0),
+                thickness + 6,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame_rgb,
+                text,
+                (x, y),
+                font,
+                scale,
+                (255, 255, 255),
+                thickness,
+                cv2.LINE_AA,
+            )
             return frame_rgb
 
         if now < self._flash_until:
@@ -354,7 +383,9 @@ class TerminalCameraApp:
         y = self.qr_gap
         for i, qr_rgb in enumerate(self.qr_history_rgb[: int(QR_HISTORY)]):
             x = left + self.qr_gap + i * (self.qr_size + self.qr_gap)
-            qr_small = cv2.resize(qr_rgb, (self.qr_size, self.qr_size), interpolation=cv2.INTER_AREA)
+            qr_small = cv2.resize(
+                qr_rgb, (self.qr_size, self.qr_size), interpolation=cv2.INTER_AREA
+            )
             bar[y : y + self.qr_size, x : x + self.qr_size] = qr_small
 
         return bar
@@ -366,7 +397,11 @@ class TerminalCameraApp:
     def capture_flow(self):
         try:
             with self._frame_lock:
-                frame = None if self._last_frame_rgb is None else self._last_frame_rgb.copy()
+                frame = (
+                    None
+                    if self._last_frame_rgb is None
+                    else self._last_frame_rgb.copy()
+                )
             if frame is None:
                 log.warning("capture_flow: last frame is None.")
                 return
@@ -378,7 +413,9 @@ class TerminalCameraApp:
                 frame = apply_frame_and_logo(frame)
 
             if self.storage is None:
-                log.error("Capture requested but storage is None (Drive not initialized).")
+                log.error(
+                    "Capture requested but storage is None (Drive not initialized)."
+                )
                 return
 
             frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -459,7 +496,9 @@ class TerminalCameraApp:
 
     def run(self):
         print("App run.")
-        print("Press q or Esc to close the ffplay window. Ctrl+C in terminal to stop app.")
+        print(
+            "Press q or Esc to close the ffplay window. Ctrl+C in terminal to stop app."
+        )
         print("The ROI, the countdown, the flash and the QR will be screen in ffplay.")
 
         self.viewer.start()
@@ -480,8 +519,14 @@ class TerminalCameraApp:
                 with self._frame_lock:
                     self._last_frame_rgb = frame_rgb.copy()
 
-                interp = cv2.INTER_AREA if (self.preview_w <= frame_w and self.preview_h <= frame_h) else cv2.INTER_LINEAR
-                small = cv2.resize(frame_rgb, (self.preview_w, self.preview_h), interpolation=interp)
+                interp = (
+                    cv2.INTER_AREA
+                    if (self.preview_w <= frame_w and self.preview_h <= frame_h)
+                    else cv2.INTER_LINEAR
+                )
+                small = cv2.resize(
+                    frame_rgb, (self.preview_w, self.preview_h), interpolation=interp
+                )
 
                 if FLIP_PREVIEW:
                     small = apply_flip(small, FLIP_MODE)
