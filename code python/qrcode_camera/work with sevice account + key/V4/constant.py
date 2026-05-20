@@ -103,7 +103,7 @@ LOGO_SCALE = 0.5  # Fraction of the image width used for logo width (e.g., 0.5 =
 #     * 0.0..1.0 => Percentage of screen space (0.0=left/top, 1.0=right/bottom)
 #     * >= 1 => Absolute positions in pixels
 LOGO_ANCHOR = 'br'
-LOGO_POS_X = 220
+LOGO_POS_X = 155
 LOGO_POS_Y = 350
 LOGO_MARGIN_X = 20
 LOGO_MARGIN_Y = 20
@@ -160,7 +160,7 @@ QR_STRIP_MARGIN_PX = 0
 
 # QR history background presentation properties
 QR_BAR_BG = '#000000'         # Background canvas color for the QR code container (Hex format)
-QR_HISTORY = 1                # Max number of previous QR codes displayed simultaneously on screen
+QR_HISTORY = 3                # Max number of previous QR codes displayed simultaneously on screen
 QR_SIZE = QR_FIXED_SIZE_PX    # Legacy alias variable map; tracks target layout sizes
 QR_GAP = 10                   # Distance space padding between adjacent UI badges
 QR_ANIM_STEPS = 12            # Number of slide frames for the QR appearance animation
