@@ -1,0 +1,5 @@
+opencv-python
+numpy
+pyshorteners
+google-api-python-client
+pillow

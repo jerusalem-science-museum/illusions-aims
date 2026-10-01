@@ -105,7 +105,7 @@ DYNAMIC_QR_ANCHOR_Y = 0.10  # Relative position from top (10% H)
 PIC_DIR = os.path.join(BASIC_PATH, "pic")
 FRAME_PNG = os.path.join(PIC_DIR, "frame.png")
 LOGO_PNG = os.path.join(PIC_DIR, "logo.png")
-MOCKUP_PNG = os.path.join(PIC_DIR,"thumbnail.png")
+MOCKUP_PNG = os.path.join(PIC_DIR,"custom_thumbnail_big.png")
 
 LOGO_SCALE = 0.5  # Fraction of the image width used for logo width (e.g., 0.5 = 50% width)
 
@@ -179,24 +179,8 @@ QR_STRIP_MARGIN_PX = 0
 
 # QR history background presentation properties
 QR_BAR_BG = '#000000'         # Background canvas color for the QR code container (Hex format)
-QR_HISTORY = 5                # Max number of previous QR codes displayed simultaneously on screen
+QR_HISTORY = 3                # Max number of previous QR codes displayed simultaneously on screen
 QR_SIZE = QR_FIXED_SIZE_PX    # Legacy alias variable map; tracks target layout sizes
 QR_GAP = 10                   # Distance space padding between adjacent UI badges
 QR_ANIM_STEPS = 12            # Number of slide frames for the QR appearance animation
-QR_ANIM_DELAY_MS = 15         # Frame step execution speed delay for slide transitions.
-
-# =============================================================================
-# הגדרות מיקום וגודל ברקודים בתבנית (הערכים בפיקסלים)
-# =============================================================================
-# הברקוד הראשי (למעלה מימין)
-QR_MAIN_SIZE = 77
-QR_MAIN_Y = 33
-QR_MAIN_X = 787
-
-# ארכיון הברקודים (היסטוריה למטה)
-QR_HIST_SIZE = 48
-QR_HIST_START_Y = 353
-QR_HIST_X_LEFT = 737
-QR_HIST_X_RIGHT = 811
-QR_HIST_ROW_GAP = 22
-
+QR_ANIM_DELAY_MS = 15         # Frame step execution speed delay for slide transitions

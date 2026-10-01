@@ -222,7 +222,6 @@ class TerminalCameraApp:
         self.qr_history_rgb: List[np.ndarray] = []
         self.qr_output_dir = Path(LOG_FOLDER) / "qr_codes"
         self.qr_output_dir.mkdir(parents=True, exist_ok=True)
-        self.qr_lock = threading.Lock()
 
         self._init_services()
 
@@ -398,60 +397,23 @@ class TerminalCameraApp:
 
     def _compose_display(self, preview_bgr: np.ndarray) -> np.ndarray:
         """
-        Combines the preview image with the template, overlays the active visitor QR 
-        code and lines up the QR history vertically using positions from constant.py
+        Combines the preview image with the bottom QR code bar.
+        Keeps original color logic to avoid color tint bugs.
         """
-        # המרה קבועה מ-BGR ל-RGB של כל התמונה והגרפיקה שחזרו מ-graphics.py
+        # המרה קבועה ויחידה מ-BGR ל-RGB בדיוק כפי שהיה בקוד המקור שלך
         preview_rgb = cv2.cvtColor(preview_bgr, cv2.COLOR_BGR2RGB)
 
-        # ייבוא הקבועים מתוך קובץ הקבועים
-        from constant import (
-            USE_CUSTOM_TEMPLATE_MODE, 
-            QR_MAIN_SIZE, QR_MAIN_Y, QR_MAIN_X,
-            QR_HIST_SIZE, QR_HIST_START_Y, QR_HIST_X_LEFT, QR_HIST_X_RIGHT, QR_HIST_ROW_GAP
-        )
-        
+        from constant import USE_CUSTOM_TEMPLATE_MODE
         if USE_CUSTOM_TEMPLATE_MODE:
-            with self.qr_lock:
-                
-                # 1. ה-QR הפעיל (הכי חדש) - ממוקם למעלה מימין
-                if len(self.qr_history_rgb) > 0 and self.qr_history_rgb[0] is not None:
-                    qr_resized_rgb = cv2.resize(
-                        self.qr_history_rgb[0], 
-                        (QR_MAIN_SIZE, QR_MAIN_SIZE), 
-                        interpolation=cv2.INTER_LINEAR
-                    )
-                    preview_rgb[QR_MAIN_Y : QR_MAIN_Y + QR_MAIN_SIZE, QR_MAIN_X : QR_MAIN_X + QR_MAIN_SIZE] = qr_resized_rgb
-
-                # 2. היסטוריית ה-QR קודים - מחושב אוטומטית לפי הקבועים
-                history_positions = [
-                    (QR_HIST_START_Y, QR_HIST_X_LEFT),                           # משבצת 1 (שמאל למעלה)
-                    (QR_HIST_START_Y, QR_HIST_X_RIGHT),                          # משבצת 2 (ימין למעלה)
-                    (QR_HIST_START_Y + QR_HIST_SIZE + QR_HIST_ROW_GAP, QR_HIST_X_LEFT),   # משבצת 3 (שמאל למטה)
-                    (QR_HIST_START_Y + QR_HIST_SIZE + QR_HIST_ROW_GAP, QR_HIST_X_RIGHT)   # משבצת 4 (ימין למטה)
-                ]
-
-                for i, pos_y_x in enumerate(history_positions):
-                    array_idx = i + 1  # דילוג על ה-QR הראשון שכבר שמנו למעלה
-                    
-                    if array_idx < len(self.qr_history_rgb):
-                        if self.qr_history_rgb[array_idx] is not None:
-                            hist_resized_rgb = cv2.resize(
-                                self.qr_history_rgb[array_idx], 
-                                (QR_HIST_SIZE, QR_HIST_SIZE), 
-                                interpolation=cv2.INTER_LINEAR
-                            )
-                            
-                            y_pos, x_pos = pos_y_x
-                            preview_rgb[y_pos : y_pos + QR_HIST_SIZE, x_pos : x_pos + QR_HIST_SIZE] = hist_resized_rgb
-
+            # מחזיר את הפריים המלא בדיוק כמו שהוא, ללא הוספת השטח השחור מלמטה
             return preview_rgb
 
+        # ---- קוד ברירת המחדל הישן (למקרה שתכבי את מצב התבנית) ----
         qr_images = []
         with self.qr_lock:
-            for qr_img in self.qr_history_rgb:
-                if qr_img is not None:
-                    qr_images.append(qr_img)
+            for qr_bgr in self.qr_list:
+                if qr_bgr is not None:
+                    qr_images.append(cv2.cvtColor(qr_bgr, cv2.COLOR_BGR2RGB))
 
         qr_bar = self.qr_manager.compose_qr_strip(
             width=self.preview_w,
@@ -589,7 +551,6 @@ class TerminalCameraApp:
 
                 frame_h, frame_w = frame_bgr.shape[:2]
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                
                 with self._frame_lock:
                     self._last_frame_rgb = frame_rgb.copy()
 
