@@ -52,11 +52,8 @@ BASIC_PATH = os.path.abspath(os.path.dirname(os.path.dirname(os.path.realpath(__
 sys.path.append(BASIC_PATH)
 
 # Path to local Google Cloud credentials and keys
-KEYS_PATH = os.path.join(BASIC_PATH, 'keys', 'arad')
+KEYS_PATH = os.path.join(BASIC_PATH, 'keys')
 GOOGLE_SERVICE_ACCOUNT_JSON = os.path.join(KEYS_PATH, 'logger-176517.json')
-
-# KEYS_PATH = os.path.join(BASIC_PATH, 'keys', 'nathan')
-# GOOGLE_SERVICE_ACCOUNT_JSON = os.path.join(KEYS_PATH, 'cameraqr-489411.json')
 
 # Google Drive folder ID where captured museum photos will be uploaded
 GOOGLE_DRIVE_FOLDER_ID = None

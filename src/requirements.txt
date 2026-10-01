@@ -3,3 +3,4 @@ numpy
 pyshorteners
 google-api-python-client
 pillow
+qrcode[pil]
