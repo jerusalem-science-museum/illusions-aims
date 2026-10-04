@@ -102,7 +102,7 @@ DYNAMIC_QR_ANCHOR_Y = 0.10  # Relative position from top (10% H)
 PIC_DIR = os.path.join(BASIC_PATH, "pic")
 FRAME_PNG = os.path.join(PIC_DIR, "frame.png")
 LOGO_PNG = os.path.join(PIC_DIR, "logo.png")
-MOCKUP_PNG = os.path.join(PIC_DIR, "thumbnail.png")  # RGBA; picture window is transparent
+MOCKUP_PNG = os.path.join(PIC_DIR, "thumbnail1080.png")  # RGBA; picture window is transparent
 
 # Saved/uploaded photo: template is rendered at this width, then cropped to the gold frame only
 CAPTURE_TEMPLATE_W = 1920
@@ -182,19 +182,20 @@ QR_ANIM_STEPS = 12            # Number of slide frames for the QR appearance ani
 QR_ANIM_DELAY_MS = 15         # Frame step execution speed delay for slide transitions
 
 # ---------------------------------------------------------
-# QR MOVING QUEUE (template "archive" crosshair slots)
+# QR MOVING QUEUE (big slot + 3-cell "archive" box in the template)
 # ---------------------------------------------------------
-# Slot rects as fractions (x0, y0, x1, y1) of the template (8000x4500), measured from
-# pic/thumbnail.png: vertical white line x=7092-7095, horizontal line y=3666-3668,
-# crosshair spans x=6535-7652, y=3109-4225. Rects stop at the lines.
-# Keys: TL=top-left, TR=top-right, BL=bottom-left, BR=bottom-right.
+# Slot rects as fractions (x0, y0, x1, y1) of the template, measured from pic/thumbnail1080.png
+# (1920x1080): the archive box is x=1492-1893, y=872-1004 with white dividers at x=1624 and
+# x=1757; the big slot sits in the orange column between the Hebrew title and the line at y=750.
+# Keys: BIG = newest QR (no border); A1 = archive right cell, A2 = middle, A3 = left.
+_TPL_W, _TPL_H = 1920, 1080
 QR_SLOT_RECTS_FRAC = {
-    'TL': (6535 / 8000, 3109 / 4500, 7092 / 8000, 3666 / 4500),
-    'TR': (7096 / 8000, 3109 / 4500, 7653 / 8000, 3666 / 4500),
-    'BL': (6535 / 8000, 3669 / 4500, 7092 / 8000, 4226 / 4500),
-    'BR': (7096 / 8000, 3669 / 4500, 7653 / 8000, 4226 / 4500),
+    'BIG': (1567 / _TPL_W, 385 / _TPL_H, 1835 / _TPL_W, 745 / _TPL_H),
+    'A1': (1758 / _TPL_W, 873 / _TPL_H, 1893 / _TPL_W, 1004 / _TPL_H),
+    'A2': (1625 / _TPL_W, 873 / _TPL_H, 1757 / _TPL_W, 1004 / _TPL_H),
+    'A3': (1493 / _TPL_W, 873 / _TPL_H, 1624 / _TPL_W, 1004 / _TPL_H),
 }
-# Fill order, newest first (Hebrew RTL): top-right, top-left, bottom-right, bottom-left
-QR_SLOT_ORDER = ['TR', 'TL', 'BR', 'BL']
-QR_SLOT_PADDING_PX = 4        # gap between a QR and the crosshair lines / slot edge (at render size; ~2 px at 900 wide)
-QR_QUEUE_RESET_S = 120        # seconds without a new capture before all QRs are cleared
+# Fill order, newest first. A QR enters BIG, then moves right to left through the archive (Hebrew RTL)
+QR_SLOT_ORDER = ['BIG', 'A1', 'A2', 'A3']
+QR_SLOT_PADDING_PX = 4        # gap between a QR and the divider lines / slot edge (px at render size)
+QR_QUEUE_RESET_S = 60        # seconds without a new capture before all QRs are cleared

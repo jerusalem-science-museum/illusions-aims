@@ -1,7 +1,7 @@
-"""Moving QR queue drawn into the 2x2 crosshair "archive" slots of the template.
+"""Moving QR queue: the newest QR sits in a big slot, older ones move through the archive cells.
 
 All state is guarded by a lock: push() is called from the capture_flow worker
-thread, render() from the main loop. Images are pre-resized in push().
+thread, render() from the main loop. Resized copies are cached per slot size.
 Animation is time-based (evaluated per render), no threads or sleeps.
 """
 import threading
@@ -22,10 +22,11 @@ from constant import (
 
 
 class _Item:
-    __slots__ = ("img", "slot", "prev_slot", "t0")
+    __slots__ = ("src", "sized", "slot", "prev_slot", "t0")
 
-    def __init__(self, img, slot, prev_slot, t0):
-        self.img = img
+    def __init__(self, src, slot, prev_slot, t0):
+        self.src = src              # original QR (RGB uint8)
+        self.sized = {}             # side length -> resized copy
         self.slot = slot            # logical position (0 = newest)
         self.prev_slot = prev_slot  # position before the last shift (None = new)
         self.t0 = t0
@@ -46,17 +47,27 @@ class QRQueue:
             fx0, fy0, fx1, fy1 = QR_SLOT_RECTS_FRAC[key]
             self._rects.append((round(fx0 * self.w), round(fy0 * self.h),
                                 round(fx1 * self.w), round(fy1 * self.h)))
-        x0, y0, x1, y1 = self._rects[0]
         pad = int(QR_SLOT_PADDING_PX)
-        self._size = max(8, min(x1 - x0, y1 - y0) - 2 * pad)
+        # each slot has its own QR side length (the big slot is larger than the archive cells)
+        self._sizes = [max(8, min(x1 - x0, y1 - y0) - 2 * pad) for x0, y0, x1, y1 in self._rects]
 
-    def _origin(self, slot: int):
+    def _origin(self, slot: int, size: int):
         x0, y0, x1, y1 = self._rects[slot]
-        return (x0 + x1 - self._size) // 2, (y0 + y1 - self._size) // 2
+        return (x0 + x1 - size) // 2, (y0 + y1 - size) // 2
+
+    @staticmethod
+    def _sized(it: "_Item", size: int) -> np.ndarray:
+        img = it.sized.get(size)
+        if img is None:
+            img = cv2.resize(it.src, (size, size), interpolation=cv2.INTER_NEAREST)
+            if len(it.sized) > 6:  # animation visits many intermediate sizes; keep the cache small
+                it.sized.clear()
+            it.sized[size] = img
+        return img
 
     def push(self, qr_rgb: np.ndarray) -> None:
         """Add a new QR (RGB uint8 array); shifts others, drops the oldest."""
-        small = cv2.resize(qr_rgb, (self._size, self._size), interpolation=cv2.INTER_NEAREST)
+        src = np.ascontiguousarray(qr_rgb)
         now = self._clock()
         with self._lock:
             for it in self._items:
@@ -64,7 +75,7 @@ class QRQueue:
                 it.slot += 1
                 it.t0 = now
             self._items = [it for it in self._items if it.slot < len(self._rects)]
-            self._items.insert(0, _Item(small, 0, None, now))
+            self._items.insert(0, _Item(src, 0, None, now))
             self._last_push = now
 
     def clear(self) -> None:
@@ -85,15 +96,18 @@ class QRQueue:
                 self._last_push = None
             # draw oldest first so newest ends on top
             for it in reversed(self._items):
-                x, y = self._origin(it.slot)
+                size = self._sizes[it.slot]
+                x, y = self._origin(it.slot, size)
                 if it.prev_slot is not None and self._anim_s > 0:
                     t = (now - it.t0) / self._anim_s
                     if t < 1.0:
-                        px, py = self._origin(it.prev_slot)
+                        psize = self._sizes[it.prev_slot]
+                        px, py = self._origin(it.prev_slot, psize)
                         k = t * t * (3 - 2 * t)  # smoothstep
+                        size = int(round(psize + (size - psize) * k))
                         x = int(round(px + (x - px) * k))
                         y = int(round(py + (y - py) * k))
-                self._blit(frame_rgb, it.img, x, y)
+                self._blit(frame_rgb, self._sized(it, size), x, y)
         return frame_rgb
 
     @staticmethod
