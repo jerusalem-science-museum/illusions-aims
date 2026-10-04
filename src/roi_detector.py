@@ -16,6 +16,13 @@ from constant import (
     ROI_X, ROI_Y, ROI_W, ROI_H,
     BASELINE_SECONDS, TRIGGER_DIST_THRESHOLD, HOLD_SECONDS, COOLDOWN_SECONDS,
 )
+import constant as _c
+
+# Optional tunables (fall back to defaults if missing from constant.py)
+NOISE_SIGMA_MULT = float(getattr(_c, "NOISE_SIGMA_MULT", 6.0))
+BASELINE_ADAPT_SECONDS = float(getattr(_c, "BASELINE_ADAPT_SECONDS", 5.0))
+HOLD_GRACE_SECONDS = float(getattr(_c, "HOLD_GRACE_SECONDS", 0.2))
+BRIGHTNESS_COMP = bool(getattr(_c, "BRIGHTNESS_COMP", False))
 
 
 @dataclass(frozen=True)
@@ -127,6 +134,10 @@ class ROITriggerDetector:
         self._baseline_samples = []  # list[np.ndarray]
         self._baseline_mean = None   # type: Optional[np.ndarray]
 
+        self._baseline_noise = 0.0   # std-based noise floor (vector norm)
+        self._last_ts = None         # type: Optional[float]
+        self._below_since = None     # type: Optional[float]
+
         self._active_since = None    # type: Optional[float]
         self._cooldown_until = 0.0
         self._disabled_until = 0.0
@@ -143,8 +154,31 @@ class ROITriggerDetector:
         self._baseline_start = float(now)
         self._baseline_samples.clear()
         self._baseline_mean = None
+        self._baseline_noise = 0.0
+        self._last_ts = None
+        self._below_since = None
         self._active_since = None
         self._cooldown_until = 0.0
+
+    def _distance(self, roi_mean: np.ndarray) -> float:
+        """Distance from baseline; ignores pure brightness (auto-exposure) shifts partly."""
+        cur = np.asarray(roi_mean, dtype=np.float32)
+        base = self._baseline_mean
+        diff = cur - base
+        if BRIGHTNESS_COMP:
+            # Remove the common (gray) shift, keep colour change; then take the larger of
+            # the colour change and a de-weighted brightness change.
+            gray = float(diff.mean())
+            chroma = float(np.linalg.norm(diff - gray))
+            # Gain-style exposure drift scales all channels proportionally
+            bm = float(base.mean()) + 1e-6
+            gain = float(cur.mean()) / bm
+            resid = float(np.linalg.norm(cur - base * gain))
+            return max(min(resid, float(np.linalg.norm(diff))), chroma)
+        return float(np.linalg.norm(diff))
+
+    def _effective_threshold(self) -> float:
+        return max(self.trigger_dist_threshold, NOISE_SIGMA_MULT * self._baseline_noise)
 
     def disable_until(self, until_ts: float) -> None:
         self._disabled_until = max(self._disabled_until, float(until_ts))
@@ -175,27 +209,41 @@ class ROITriggerDetector:
             if (now - float(self._baseline_start)) >= self.baseline_seconds and len(self._baseline_samples) > 0:
                 arr = np.stack(self._baseline_samples, axis=0)
                 self._baseline_mean = arr.mean(axis=0).astype(np.float32)
+                self._baseline_noise = float(np.linalg.norm(arr.std(axis=0)))
+                self._last_ts = now
             return (self._baseline_mean is not None, False, False, 0.0)
+
+        dt = 0.0 if self._last_ts is None else max(0.0, now - self._last_ts)
+        self._last_ts = now
+        dist = self._distance(roi_mean)
+        thr = self._effective_threshold()
+
+        # Adaptive baseline: follow slow lighting drift, only while clearly quiet
+        if dist < thr and self._active_since is None and BASELINE_ADAPT_SECONDS > 0 and dt > 0:
+            a = min(1.0, dt / BASELINE_ADAPT_SECONDS)
+            self._baseline_mean = (self._baseline_mean + a * (np.asarray(roi_mean, dtype=np.float32) - self._baseline_mean)).astype(np.float32)
 
         # Gating
         roi_enabled = allow_trigger and (now >= self._cooldown_until) and (now >= self._disabled_until)
         if not roi_enabled:
             self._active_since = None
-            dist = float(np.linalg.norm(np.asarray(roi_mean, dtype=np.float32) - self._baseline_mean))
+            self._below_since = None
             return (True, False, False, dist)
 
-        # Trigger logic
-        dist = float(np.linalg.norm(np.asarray(roi_mean, dtype=np.float32) - self._baseline_mean))
-        if dist >= self.trigger_dist_threshold:
+        # Trigger logic (short dropouts below threshold don't reset the hold timer)
+        if dist >= thr:
+            self._below_since = None
             if self._active_since is None:
                 self._active_since = now
-            held = now - float(self._active_since)
-            if held >= self.hold_seconds:
-                # Fire once, start cooldown
+            if now - float(self._active_since) >= self.hold_seconds:
                 self._active_since = None
                 self._cooldown_until = now + self.cooldown_seconds
                 return (True, True, True, dist)
-        else:
-            self._active_since = None
+        elif self._active_since is not None:
+            if self._below_since is None:
+                self._below_since = now
+            if now - self._below_since > HOLD_GRACE_SECONDS:
+                self._active_since = None
+                self._below_since = None
 
         return (True, True, False, dist)

@@ -29,8 +29,8 @@ CAMERA_ANCHOR = 'c'
 CAMERA_ANCHOR_MARGIN_PX = 0
 
 # Screen preview and camera resolution dimensions
-PREVIEW_W = 900
-PREVIEW_H = 506
+PREVIEW_W = 1920
+PREVIEW_H = 1080
 CAMERA_RESOLUTION = (640, 480)
 FRAME_WIDTH, FRAME_HEIGHT = CAMERA_RESOLUTION
 
@@ -102,7 +102,10 @@ DYNAMIC_QR_ANCHOR_Y = 0.10  # Relative position from top (10% H)
 PIC_DIR = os.path.join(BASIC_PATH, "pic")
 FRAME_PNG = os.path.join(PIC_DIR, "frame.png")
 LOGO_PNG = os.path.join(PIC_DIR, "logo.png")
-MOCKUP_PNG = os.path.join(PIC_DIR,"custom_thumbnail_big.png")
+MOCKUP_PNG = os.path.join(PIC_DIR, "thumbnail.png")  # RGBA; picture window is transparent
+
+# Saved/uploaded photo: template is rendered at this width, then cropped to the gold frame only
+CAPTURE_TEMPLATE_W = 1920
 
 LOGO_SCALE = 0.5  # Fraction of the image width used for logo width (e.g., 0.5 = 50% width)
 
@@ -118,14 +121,6 @@ LOGO_POS_Y = 350
 LOGO_MARGIN_X = 20
 LOGO_MARGIN_Y = 20
 
-TEMPLATE_BOXES = {
-    "custom_thumbnail_big.png": {
-        "ymin": 0.16,  # 16% מלמעלה
-        "xmin": 0.08,  # 8% משמאל
-        "ymax": 0.84,  # 84% מלמעלה (עד תחתית המסגרת)
-        "xmax": 0.70   # 70% משמאל (עד איפה שמתחיל הרקע הכתום הימני)
-    },
-}
 # ---------------------------------------------------------
 # IMAGE FLIPPING (Mirroring for Museum Mirror Exhibits)
 # ---------------------------------------------------------
@@ -152,13 +147,17 @@ ROI_X = 480  # Horizontal position (Pixels from Left) -> Placed in the Upper-Rig
 ROI_Y = 80   # Vertical position (Pixels from Top) -> Placed in the Upper-Right corner
 
 BASELINE_SECONDS = 2.0        # Time window in seconds to capture and calculate background average
-TRIGGER_DIST_THRESHOLD = 70.0 # Sensitivity threshold. Higher means less sensitive to ambient noise.
+TRIGGER_DIST_THRESHOLD = 20.0 # Min RGB distance from baseline to count as a change (floor; was 70). Lower = more sensitive.
+NOISE_SIGMA_MULT = 6.0        # Effective threshold = max(TRIGGER_DIST_THRESHOLD, this * measured baseline noise)
+BASELINE_ADAPT_SECONDS = 5.0  # Baseline slowly follows lighting drift (time constant); 0 disables
+HOLD_GRACE_SECONDS = 0.2      # Brief dips below threshold don't reset the hold timer
+BRIGHTNESS_COMP = False       # If True, discount uniform gain shifts (can hide shadows/covering; off by default)
 HOLD_SECONDS = 0.5            # Time in seconds visitor must hold their position/QR to trigger capture
 COOLDOWN_SECONDS = 2.0        # Safety lock window right after a trigger event happens
 
 # Disable motion detector completely for X seconds after a successful capture
 # Gives visitors time to view/scan their QR code without triggering the camera again
-ROI_DISABLE_AFTER_CAPTURE_S = 10.0
+ROI_DISABLE_AFTER_CAPTURE_S = 1.0
 
 DRAW_ROI_RECT = True  # If True, renders the green/red helper rectangle boundary on the screen
 
@@ -181,3 +180,21 @@ QR_SIZE = QR_FIXED_SIZE_PX    # Legacy alias variable map; tracks target layout 
 QR_GAP = 10                   # Distance space padding between adjacent UI badges
 QR_ANIM_STEPS = 12            # Number of slide frames for the QR appearance animation
 QR_ANIM_DELAY_MS = 15         # Frame step execution speed delay for slide transitions
+
+# ---------------------------------------------------------
+# QR MOVING QUEUE (template "archive" crosshair slots)
+# ---------------------------------------------------------
+# Slot rects as fractions (x0, y0, x1, y1) of the template (8000x4500), measured from
+# pic/thumbnail.png: vertical white line x=7092-7095, horizontal line y=3666-3668,
+# crosshair spans x=6535-7652, y=3109-4225. Rects stop at the lines.
+# Keys: TL=top-left, TR=top-right, BL=bottom-left, BR=bottom-right.
+QR_SLOT_RECTS_FRAC = {
+    'TL': (6535 / 8000, 3109 / 4500, 7092 / 8000, 3666 / 4500),
+    'TR': (7096 / 8000, 3109 / 4500, 7653 / 8000, 3666 / 4500),
+    'BL': (6535 / 8000, 3669 / 4500, 7092 / 8000, 4226 / 4500),
+    'BR': (7096 / 8000, 3669 / 4500, 7653 / 8000, 4226 / 4500),
+}
+# Fill order, newest first (Hebrew RTL): top-right, top-left, bottom-right, bottom-left
+QR_SLOT_ORDER = ['TR', 'TL', 'BR', 'BL']
+QR_SLOT_PADDING_PX = 4        # gap between a QR and the crosshair lines / slot edge (at render size; ~2 px at 900 wide)
+QR_QUEUE_RESET_S = 120        # seconds without a new capture before all QRs are cleared

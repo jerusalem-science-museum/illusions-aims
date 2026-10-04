@@ -1,0 +1,4 @@
+- make roi recognize change in pixels more robustly, currently needs very large change for it to capture an image
+- takes way too long from capture to new green roi ready for next image.
+    - check if upload times can be improved via keeping an open session
+    - diagnose why roi stays red after qr is shown

@@ -2,10 +2,27 @@ import os
 import datetime
 import re
 import tempfile
+import threading
+import queue
+import time
 from typing import Optional
 import cv2
 from google.oauth2 import service_account
 import pyshorteners
+
+
+# Socket timeout for every Google call. httplib2's default is "none", so a stalled
+# connection would hold the client lock forever. Must exceed a real photo upload.
+HTTP_TIMEOUT_S = 30
+
+
+def _build_service(name: str, version: str, creds):
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
+    from googleapiclient.discovery import build
+
+    http = AuthorizedHttp(creds, http=httplib2.Http(timeout=HTTP_TIMEOUT_S))
+    return build(name, version, http=http, cache_discovery=False)
 
 
 # =========================================================
@@ -19,6 +36,7 @@ class GoogleDriveUploader:
         make_public: bool = True,
         enable_shortener: bool = False,
         shortener_backend: str = "tinyurl",
+        async_permission: bool = True,
     ):
         self.service_account_json = service_account_json
         self.folder_id = folder_id
@@ -28,9 +46,13 @@ class GoogleDriveUploader:
         self.shortener_backend = shortener_backend
         self._shortener = None
         self._drive = None
+        # httplib2 is not thread-safe: one shared service, every call under this lock.
+        self._lock = threading.Lock()
+        self.async_permission = async_permission
 
         self._init_drive()
         self._init_shortener()
+        threading.Thread(target=self._keepalive_loop, daemon=True).start()
 
     def _init_drive(self):
         try:
@@ -55,7 +77,7 @@ class GoogleDriveUploader:
                 self.service_account_json,
                 scopes=scopes
             )
-            self._drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+            self._drive = _build_service("drive", "v3", creds)
             print("[INFO] Google Drive initialized successfully.")
         except Exception as e:
             print(f"[ERROR] Failed to initialize Google Drive with the provided key: {e}")
@@ -64,15 +86,48 @@ class GoogleDriveUploader:
                 "Check that the service account JSON is valid and that the Drive API is enabled."
             ) from e
 
+    def _ping(self):
+        # Cheap call: keeps the OAuth token fresh and the TLS connection open.
+        with self._lock:
+            self._drive.about().get(fields="kind").execute()
+
+    def _keepalive_loop(self):
+        try:
+            self._ping()  # warm-up: token fetch + TLS handshake before first capture
+            print("[INFO] Drive connection warmed up.")
+        except Exception as e:
+            print(f"[WARNING] Drive warm-up failed: {e}")
+        while True:
+            time.sleep(45)
+            try:
+                self._ping()
+            except Exception as e:
+                print(f"[WARNING] Drive keepalive failed: {e}")
+
     def _init_shortener(self):
         if not self.enable_shortener:
             return
         try:
-            self._shortener = pyshorteners.Shortener()
+            self._shortener = pyshorteners.Shortener(timeout=5)
             print("[INFO] URL shortener initialized.")
         except Exception as e:
             print(f"[WARNING] Failed to initialize URL shortener: {e}")
             self._shortener = None
+
+    def _make_public(self, file_id: str):
+        for attempt in range(3):
+            try:
+                with self._lock:
+                    self._drive.permissions().create(
+                        fileId=file_id,
+                        body={"type": "anyone", "role": "reader"},
+                        fields="id",
+                    ).execute()
+                print("[INFO] Public permission added.")
+                return
+            except Exception as e:
+                print(f"[WARNING] Failed to make file public (try {attempt + 1}): {e}")
+                time.sleep(1)
 
     def upload_and_get_url(self, filepath: str) -> str:
         from googleapiclient.http import MediaFileUpload
@@ -87,43 +142,30 @@ class GoogleDriveUploader:
             metadata["parents"] = [self.folder_id]
 
         try:
-            media = MediaFileUpload(filepath, mimetype="image/jpeg", resumable=True)
-            created = self._drive.files().create(
-                body=metadata,
-                media_body=media,
-                fields="id"
-            ).execute()
+            # Simple (single-request) upload; resumable adds extra round trips.
+            media = MediaFileUpload(filepath, mimetype="image/jpeg", resumable=False)
+            with self._lock:
+                created = self._drive.files().create(
+                    body=metadata,
+                    media_body=media,
+                    fields="id,webViewLink",
+                ).execute(num_retries=2)
             file_id = created["id"]
             print(f"[INFO] File uploaded to Drive. file_id={file_id}")
         except Exception as e:
             print(f"[ERROR] Google Drive upload failed for {filepath}: {e}")
             raise RuntimeError(f"Google Drive upload failed: {e}") from e
 
+        # webViewLink came back with the create call: no extra files.get round trip.
+        url = created.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
+
         if self.make_public:
-            try:
-                self._drive.permissions().create(
-                    fileId=file_id,
-                    body={"type": "anyone", "role": "reader"},
-                    fields="id",
-                ).execute()
-                print("[INFO] Public permission added.")
-            except Exception as e:
-                print(f"[WARNING] Failed to make file public: {e}")
-
-        try:
-            info = self._drive.files().get(
-                fileId=file_id,
-                fields="webViewLink,webContentLink"
-            ).execute()
-
-            url = (
-                info.get("webViewLink")
-                or info.get("webContentLink")
-                or f"https://drive.google.com/file/d/{file_id}/view"
-            )
-        except Exception as e:
-            print(f"[WARNING] Failed to retrieve webViewLink/webContentLink: {e}")
-            url = f"https://drive.google.com/file/d/{file_id}/view"
+            if self.async_permission:
+                threading.Thread(
+                    target=self._make_public, args=(file_id,), daemon=True
+                ).start()
+            else:
+                self._make_public(file_id)
 
         if self._shortener is not None:
             try:
@@ -141,7 +183,10 @@ class GoogleSheetsLogger:
         self.spreadsheet_id = self._normalize_spreadsheet_id(spreadsheet_id)
         self.worksheet_name = (worksheet_name or "logs").strip()
         self._svc = None
+        self._lock = threading.Lock()  # httplib2 is not thread-safe
+        self._q = queue.Queue()
         self._init_sheets()
+        threading.Thread(target=self._worker, daemon=True).start()
 
     @staticmethod
     def _normalize_spreadsheet_id(value: str) -> str:
@@ -187,7 +232,7 @@ class GoogleSheetsLogger:
                 self.service_account_json,
                 scopes=scopes
             )
-            self._svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+            self._svc = _build_service("sheets", "v4", creds)
             print("[INFO] Google Sheets initialized successfully.")
         except Exception as e:
             print(f"[ERROR] Failed to initialize Google Sheets with the provided key: {e}")
@@ -232,6 +277,18 @@ class GoogleSheetsLogger:
                 f"HTTP detail: {detail}"
             ) from e
 
+    def append_row_async(self, values: list):
+        """Queue a row; a background worker sends it (off the capture path)."""
+        self._q.put(values)
+
+    def _worker(self):
+        while True:
+            values = self._q.get()
+            try:
+                self.append_row(values)
+            except Exception as e:
+                print(f"[ERROR] Async Sheets append failed: {e}")
+
     def append_row(self, values: list):
         from googleapiclient.errors import HttpError
 
@@ -239,13 +296,14 @@ class GoogleSheetsLogger:
         rng = self._a1_range()
 
         try:
-            self._svc.spreadsheets().values().append(
-                spreadsheetId=self.spreadsheet_id,
-                range=rng,
-                valueInputOption="USER_ENTERED",
-                insertDataOption="INSERT_ROWS",
-                body=body,
-            ).execute()
+            with self._lock:
+                self._svc.spreadsheets().values().append(
+                    spreadsheetId=self.spreadsheet_id,
+                    range=rng,
+                    valueInputOption="USER_ENTERED",
+                    insertDataOption="INSERT_ROWS",
+                    body=body,
+                ).execute()
             print(f"[INFO] Row added to Google Sheets: {values}")
         except HttpError as e:
             detail = ""

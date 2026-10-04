@@ -12,7 +12,8 @@ import numpy as np
 
 from constant import *
 from log import get_logger
-from graphics import apply_flip, apply_frame_and_logo, make_qr_image, ROIManager
+from graphics import apply_flip, apply_frame_and_logo, render_capture_image, make_qr_image, ROIManager
+from qr_queue import QRQueue
 
 # Google upload helpers
 try:
@@ -207,7 +208,7 @@ class TerminalCameraApp:
         self.display_w = self.preview_w
         #self.display_h = self.preview_h + self.qr_bar_h
         if USE_CUSTOM_TEMPLATE_MODE:
-            self.display_h = self.preview_h  # בדיוק 506, בלי תוספות שחורות ובלי עיוותים
+            self.display_h = self.preview_h  # בדיוק PREVIEW_H, בלי תוספות שחורות ובלי עיוותים
         else:
             self.display_h = self.preview_h + self.qr_bar_h
 
@@ -219,7 +220,7 @@ class TerminalCameraApp:
         self.roi_manager = ROIManager()
         self.grabber = CameraGrabber(CAM_INDEX)
         self.viewer = FFplayViewer(self.display_w, self.display_h, self.preview_fps)
-        self.qr_history_rgb: List[np.ndarray] = []
+        self.qr_queue = QRQueue(self.preview_w, self.preview_h)
         self.qr_output_dir = Path(LOG_FOLDER) / "qr_codes"
         self.qr_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -291,7 +292,7 @@ class TerminalCameraApp:
             return
         try:
             ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.sheets_logger.append_row([ts, event, local_name, url, note])
+            self.sheets_logger.append_row_async([ts, event, local_name, url, note])
         except Exception:
             log.exception("Failed to append row to Google Sheets (event=%s).", event)
 
@@ -362,70 +363,23 @@ class TerminalCameraApp:
                 frame_rgb[:] = 255
         return frame_rgb
 
-    def _push_qr_to_history(self, qr_rgb: np.ndarray):
-        self.qr_history_rgb.insert(0, qr_rgb)
-        self.qr_history_rgb = self.qr_history_rgb[: int(QR_HISTORY)]
-
-    def _build_qr_strip(self) -> np.ndarray:
-        bar = np.zeros((self.qr_bar_h, self.display_w, 3), dtype=np.uint8)
-        bg = str(QR_BAR_BG).lstrip("#")
-        if len(bg) == 6:
-            try:
-                bar[:] = tuple(int(bg[i : i + 2], 16) for i in (0, 2, 4))
-            except Exception:
-                pass
-
-        total = int(QR_HISTORY) * self.qr_size + (int(QR_HISTORY) + 1) * self.qr_gap
-        align = str(QR_STRIP_ALIGN).lower()
-        margin = int(QR_STRIP_MARGIN_PX)
-        if align == "left":
-            left = max(0, margin)
-        elif align == "right":
-            left = max(0, self.display_w - total - margin)
-        else:
-            left = max(0, (self.display_w - total) // 2 + margin)
-
-        y = self.qr_gap
-        for i, qr_rgb in enumerate(self.qr_history_rgb[: int(QR_HISTORY)]):
-            x = left + self.qr_gap + i * (self.qr_size + self.qr_gap)
-            qr_small = cv2.resize(
-                qr_rgb, (self.qr_size, self.qr_size), interpolation=cv2.INTER_AREA
-            )
-            bar[y : y + self.qr_size, x : x + self.qr_size] = qr_small
-
-        return bar
-
     def _compose_display(self, preview_bgr: np.ndarray) -> np.ndarray:
         """
         Combines the preview image with the bottom QR code bar.
         Keeps original color logic to avoid color tint bugs.
         """
         # המרה קבועה ויחידה מ-BGR ל-RGB בדיוק כפי שהיה בקוד המקור שלך
-        preview_rgb = cv2.cvtColor(preview_bgr, cv2.COLOR_BGR2RGB)
+        preview_rgb = preview_bgr  # already RGB (app convention: RGB everywhere inside)
 
         from constant import USE_CUSTOM_TEMPLATE_MODE
         if USE_CUSTOM_TEMPLATE_MODE:
             # מחזיר את הפריים המלא בדיוק כמו שהוא, ללא הוספת השטח השחור מלמטה
-            return preview_rgb
+            # QRs go into the template's crosshair slots (moving queue, auto-reset)
+            return self.qr_queue.render(preview_rgb)
 
-        # ---- קוד ברירת המחדל הישן (למקרה שתכבי את מצב התבנית) ----
-        qr_images = []
-        with self.qr_lock:
-            for qr_bgr in self.qr_list:
-                if qr_bgr is not None:
-                    qr_images.append(cv2.cvtColor(qr_bgr, cv2.COLOR_BGR2RGB))
-
-        qr_bar = self.qr_manager.compose_qr_strip(
-            width=self.preview_w,
-            height=self.qr_bar_h,
-            qr_images=qr_images,
-            bg_color=QR_BAR_BG,
-            align=QR_STRIP_ALIGN,
-            margin_px=QR_STRIP_MARGIN_PX,
-            gap_px=QR_GAP,
-            anim_offset_x=int(self.qr_anim_offset_x),
-        )
-
+        # Non-template mode: simple black bar below the preview (QR queue slots
+        # only make sense on the template, so QRs are not drawn here).
+        qr_bar = np.zeros((self.qr_bar_h, self.display_w, 3), dtype=np.uint8)
         return np.vstack([preview_rgb, qr_bar])
      
 
@@ -445,7 +399,7 @@ class TerminalCameraApp:
                 frame = apply_flip(frame, FLIP_MODE)
 
             if CAPTURE_APPLY_OVERLAYS:
-                frame = apply_frame_and_logo(frame)
+                frame = render_capture_image(frame)  # RGB; gold frame only, hi-res
 
             if self.storage is None:
                 log.error(
@@ -453,7 +407,7 @@ class TerminalCameraApp:
                 )
                 return
 
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # BGR only for cv2.imwrite in storage
             try:
                 local_name, url = self.storage.save_frame_and_upload(frame_bgr)
             except Exception:
@@ -473,7 +427,7 @@ class TerminalCameraApp:
             try:
                 qr_img = make_qr_image(url)
                 qr_rgb = np.array(qr_img.convert("RGB"), dtype=np.uint8)
-                self._push_qr_to_history(qr_rgb)
+                self.qr_queue.push(qr_rgb)
 
                 stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 qr_path = self.qr_output_dir / f"qr_{stamp}.png"
@@ -488,8 +442,6 @@ class TerminalCameraApp:
             if bool(globals().get("SHEETS_LOG_QR_EVENTS", False)):
                 self._log_sheet_event("QR_OK", local_name, url, "")
 
-            self.roi_manager.on_capture_done(time.monotonic())
-
         finally:
             self._sequence_running = False
             self._capture_started = False
@@ -499,11 +451,8 @@ class TerminalCameraApp:
                 self.roi_manager.on_capture_done(time.monotonic())
             except Exception as e:
                 log.error(f"Error in on_capture_done: {e}")
-            try:
-                now = time.monotonic()
-                self.roi_manager.detector.reset_baseline(now)
-            except Exception as e:
-                log.error(f"Failed to reset ROI baseline in finally: {e}")
+            # Baseline is intentionally kept (adaptive baseline follows drift);
+            # resetting it kept the ROI red for BASELINE_SECONDS after each capture.
             # -----------------------------------------------------------
             try:
                 self._capture_lock.release()
@@ -573,7 +522,7 @@ class TerminalCameraApp:
                     frame_h=frame_h,
                     preview_w=self.preview_w,
                     preview_h=self.preview_h,
-                    preview_bgr=small,
+                    preview_rgb=small,
                     now=now,
                     allow_trigger=allow_trigger,
                 )

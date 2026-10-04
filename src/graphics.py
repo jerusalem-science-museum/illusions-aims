@@ -1,3 +1,5 @@
+import os
+import threading
 import time
 from typing import Optional, Tuple, List, Dict
 
@@ -29,16 +31,16 @@ log = get_logger()
 # =========================================================
 # Utility: flip
 # =========================================================
-def apply_flip(img_bgr: np.ndarray, mode: str) -> np.ndarray:
-    """Flip helper used for preview/capture."""
+def apply_flip(img: np.ndarray, mode: str) -> np.ndarray:
+    """Flip helper used for preview/capture (channel-order agnostic)."""
     mode = (mode or "").lower().strip()
     if mode == "h":
-        return cv2.flip(img_bgr, 1)
+        return cv2.flip(img, 1)
     if mode == "v":
-        return cv2.flip(img_bgr, 0)
+        return cv2.flip(img, 0)
     if mode == "hv":
-        return cv2.flip(img_bgr, -1)
-    return img_bgr
+        return cv2.flip(img, -1)
+    return img
 
 
 # =========================================================
@@ -138,7 +140,7 @@ def make_qr_image(url: str) -> Image.Image:
     Build a QR PIL image for the given URL.
     Resizing is handled by QRStrip (so resizing stays in graphics.py only).
     """
-    qr = qrcode.QRCode(border=1)
+    qr = qrcode.QRCode(border=2, error_correction=qrcode.constants.ERROR_CORRECT_L)
     qr.add_data(url)
     qr.make(fit=True)
     return qr.make_image(fill_color="black", back_color="white").convert("RGB")
@@ -275,10 +277,10 @@ class QRStrip:
 # =========================================================
 # 3) ROI manager (placement + trigger + drawing)
 # =========================================================
-def _draw_roi_shape(preview_bgr: np.ndarray, roi: ROI, active: bool) -> np.ndarray:
+def _draw_roi_shape(preview_rgb: np.ndarray, roi: ROI, active: bool) -> np.ndarray:
     """Draw the ROI shape on the preview frame (rect or circle)."""
     if not DRAW_ROI_RECT:
-        return preview_bgr
+        return preview_rgb
 
     color = (0, 255, 0) if active else (255, 0, 0)
 
@@ -289,11 +291,11 @@ def _draw_roi_shape(preview_bgr: np.ndarray, roi: ROI, active: bool) -> np.ndarr
         cx = int((x1 + x2) / 2)
         cy = int((y1 + y2) / 2)
         r = int(min(roi.w, roi.h) / 2)
-        cv2.circle(preview_bgr, (cx, cy), max(1, r), color, 2)
+        cv2.circle(preview_rgb, (cx, cy), max(1, r), color, 2)
     else:
-        cv2.rectangle(preview_bgr, (x1, y1), (x2, y2), color, 2)
+        cv2.rectangle(preview_rgb, (x1, y1), (x2, y2), color, 2)
 
-    return preview_bgr
+    return preview_rgb
 
 
 class ROIManager:
@@ -328,7 +330,7 @@ class ROIManager:
         frame_h: int,
         preview_w: int,
         preview_h: int,
-        preview_bgr: np.ndarray,
+        preview_rgb: np.ndarray,
         now: float,
         allow_trigger: bool,
     ) -> Tuple[np.ndarray, bool]:
@@ -336,12 +338,12 @@ class ROIManager:
         Process ROI for one preview frame.
 
         Returns:
-          (preview_bgr_with_roi_drawn, should_trigger)
+          (preview_rgb_with_roi_drawn, should_trigger)
         """
         roi_cam = decide_roi_cam(frame_w, frame_h)
         roi_preview = map_roi_cam_to_preview(roi_cam, frame_w, frame_h, preview_w, preview_h)
 
-        mean = roi_mean_rgb(preview_bgr, roi_preview)
+        mean = roi_mean_rgb(preview_rgb, roi_preview)
         baseline_ready, roi_enabled, should_trigger, _dist = self.detector.update(mean, now, allow_trigger=allow_trigger)
 
         if baseline_ready and not self._baseline_logged:
@@ -349,8 +351,8 @@ class ROIManager:
             self._baseline_logged = True
 
         active = bool(baseline_ready and roi_enabled and allow_trigger)
-        preview_bgr = _draw_roi_shape(preview_bgr, roi_preview, active=active)
-        return preview_bgr, bool(should_trigger)
+        preview_rgb = _draw_roi_shape(preview_rgb, roi_preview, active=active)
+        return preview_rgb, bool(should_trigger)
 
 
 # =========================================================
@@ -390,27 +392,27 @@ class CountdownController:
         root.after(seconds * 1000, do_flash)
         root.after(int(seconds * 1000 + float(flash_duration_s) * 1000), on_after_flash)
 
-    def apply(self, preview_bgr: np.ndarray, now: float) -> np.ndarray:
+    def apply(self, preview_rgb: np.ndarray, now: float) -> np.ndarray:
         """Apply flash and countdown overlay to the preview frame."""
         if float(now) < float(self._flash_until):
             if str(self._flash_color).lower() == "black":
-                preview_bgr[:] = 0
+                preview_rgb[:] = 0
             else:
-                preview_bgr[:] = 255
+                preview_rgb[:] = 255
 
         if self._countdown_text is not None:
             text = str(self._countdown_text)
-            h, w = preview_bgr.shape[:2]
+            h, w = preview_rgb.shape[:2]
             font = cv2.FONT_HERSHEY_SIMPLEX
             scale = max(1.0, min(w, h) / 250.0)
             thickness = max(2, int(scale * 2.5))
             (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
             x = int((w - tw) / 2)
             y = int((h + th) / 2)
-            cv2.putText(preview_bgr, text, (x, y), font, scale, (0, 0, 0), thickness + 6, cv2.LINE_AA)
-            cv2.putText(preview_bgr, text, (x, y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+            cv2.putText(preview_rgb, text, (x, y), font, scale, (0, 0, 0), thickness + 6, cv2.LINE_AA)
+            cv2.putText(preview_rgb, text, (x, y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
 
-        return preview_bgr
+        return preview_rgb
 
 
 # =========================================================
@@ -449,58 +451,192 @@ def overlay_rgba(dst_rgb: np.ndarray, src_rgba: np.ndarray, x: int, y: int) -> n
     dst_rgb[y1:y2, x1:x2] = out.astype(np.uint8)
     return dst_rgb
 
-def apply_custom_template_with_video(frame_rgb: np.ndarray, template_path: str) -> np.ndarray:
+class _TemplateCache:
     """
-    Blends the camera video inside the exact pixel coordinates of the template.
-    Fixes the camera blue tint by converting ONLY the video crop to match the BGR template.
+    Loads the RGBA template ONCE and caches per-size renders.
+
+    Everything here is RGB. cv2.imread gives BGR(A); it is converted immediately.
+    The picture window is the transparent hole (alpha < 128) of the template; the
+    camera image is placed under the template and the template is alpha-blended over it.
+    Geometry (window box, gold-frame box) is stored as fractions of the template size,
+    so it scales to any output size.
     """
-    if not os.path.exists(template_path):
-        return frame_rgb
 
-    # 1. טעינת קובץ הגרפיקה הכתום (נטען כ-BGR, נשאר כחול/כתום נכון ומקורי לפי התמונה)
-    template_bgr = cv2.imread(template_path)
-    if template_bgr is None:
-        return frame_rgb
+    def __init__(self, path: str):
+        self.path = path
+        self.ok = False
+        self._sized: Dict[Tuple[int, int], dict] = {}
+        self._lock = threading.Lock()
+        self._load()
 
-    # 2. וידוא מימדי התבנית המקורית (900x506) כדי למלא את המסך
-    target_w = 900
-    target_h = 506
-    if template_bgr.shape[1] != target_w or template_bgr.shape[0] != target_h:
-        template_bgr = cv2.resize(template_bgr, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+    def _load(self):
+        if not os.path.exists(self.path):
+            return
+        raw = cv2.imread(self.path, cv2.IMREAD_UNCHANGED)
+        if raw is None:
+            return
+        if raw.ndim == 2:
+            raw = cv2.cvtColor(raw, cv2.COLOR_GRAY2BGRA)
+        elif raw.shape[2] == 3:
+            raw = cv2.cvtColor(raw, cv2.COLOR_BGR2BGRA)
+        # raw stays BGRA (no full-size copy); converted to RGBA after downscaling below
+        H, W = raw.shape[:2]
+        self.aspect = W / H
 
-    # 3. המיקומים המדויקים בפיקסלים בתוך קובץ ה-PNG עבור המצלמה
-    y_min, x_min = 90, 85
-    y_max, x_max = 410, 620
+        # Window box (transparent hole) as fractions.
+        # Row/column projections instead of np.where: the source is 8000x4500 and the
+        # Pi has little RAM.
+        hole = raw[:, :, 3] < 128
+        cols = np.flatnonzero(hole.any(axis=0))
+        rows = np.flatnonzero(hole.any(axis=1))
+        del hole
+        if len(cols) == 0:
+            log.warning("Template %s has no transparent window.", self.path)
+            return
+        self.win_frac = (cols[0] / W, rows[0] / H, (cols[-1] + 1) / W, (rows[-1] + 1) / H)
 
-    box_w = int(x_max - x_min)
-    box_h = int(y_max - y_min)
+        # Keep only a premultiplied copy downscaled to the largest size we ever render,
+        # so per-size renders never touch the full-resolution image (uint8 throughout).
+        # Premultiply in horizontal strips to keep temporaries small.
+        for y in range(0, H, 256):
+            s = raw[y:y + 256]
+            a = np.repeat(s[:, :, 3:4], 3, axis=2)
+            s[:, :, :3] = cv2.multiply(s[:, :, :3], a, scale=1.0 / 255.0)
+        max_w = min(W, max(int(CAPTURE_TEMPLATE_W), int(PREVIEW_W)))
+        max_h = max(1, int(round(max_w * H / W)))
+        small_bgra = cv2.resize(raw, (max_w, max_h), interpolation=cv2.INTER_AREA)
+        del raw
+        # BGR(A) -> RGBA at the I/O boundary
+        self.rgba_pre = cv2.cvtColor(small_bgra, cv2.COLOR_BGRA2RGBA)
 
-    # 4. Center Crop - חיתוך פרופורציונלי של המצלמה (frame_rgb) למניעת מריחה
+        # Gold frame outer box: largest connected region differing from the background colour
+        # (sampled at the top-left corner). Done on a small copy; only runs once.
+        sw = 1600
+        sh = max(1, int(round(sw * H / W)))
+        small = cv2.resize(self.rgba_pre[:, :, :3], (sw, sh), interpolation=cv2.INTER_AREA).astype(np.int16)
+        bg = small[2, 2]
+        diff = np.abs(small - bg).sum(axis=2) > 40
+        diff = cv2.morphologyEx(diff.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+        n, _lab, stats, _c = cv2.connectedComponentsWithStats(diff, connectivity=8)
+        if n > 1:
+            i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            x, y, w, h = (int(stats[i, k]) for k in (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP, cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
+            self.frame_frac = (x / sw, y / sh, (x + w) / sw, (y + h) / sh)
+        else:
+            self.frame_frac = (0.0, 0.0, 1.0, 1.0)
+        self.ok = True
+
+    def get(self, out_w: int, out_h: int) -> Optional[dict]:
+        if not self.ok:
+            return None
+        key = (int(out_w), int(out_h))
+        d = self._sized.get(key)
+        if d is not None:
+            return d
+        with self._lock:
+            d = self._sized.get(key)
+            if d is not None:
+                return d
+            W, H = key
+            src = self.rgba_pre  # already premultiplied
+            if (W, H) == (src.shape[1], src.shape[0]):
+                pre = src
+            else:
+                interp = cv2.INTER_AREA if W < src.shape[1] else cv2.INTER_LINEAR
+                pre = cv2.resize(src, (W, H), interpolation=interp)
+            tpl_pre = np.ascontiguousarray(pre[:, :, :3])
+            alpha = pre[:, :, 3]
+
+            fx0, fy0, fx1, fy1 = self.win_frac
+            x0, y0 = int(round(fx0 * W)), int(round(fy0 * H))
+            x1, y1 = int(round(fx1 * W)), int(round(fy1 * H))
+            gx0, gy0, gx1, gy1 = self.frame_frac
+            crop = (int(gx0 * W), int(gy0 * H), min(W, int(np.ceil(gx1 * W))), min(H, int(np.ceil(gy1 * H))))
+            d = {
+                "tpl_pre": tpl_pre,
+                "inv_alpha": (255 - alpha[y0:y1, x0:x1]).astype(np.uint16)[:, :, None],
+                "tpl_win": tpl_pre[y0:y1, x0:x1].astype(np.uint16),
+                "win": (x0, y0, x1, y1),
+                "crop": crop,
+            }
+            self._sized[key] = d
+            return d
+
+
+_template_cache: Optional[_TemplateCache] = None
+_template_cache_lock = threading.Lock()
+
+
+def _get_template_cache() -> _TemplateCache:
+    global _template_cache
+    if _template_cache is None or _template_cache.path != MOCKUP_PNG:
+        with _template_cache_lock:
+            if _template_cache is None or _template_cache.path != MOCKUP_PNG:
+                _template_cache = _TemplateCache(MOCKUP_PNG)
+    return _template_cache
+
+
+def apply_custom_template_with_video(
+    frame_rgb: np.ndarray, out_w: int = None, out_h: int = None, crop_to_frame: bool = False
+) -> Optional[np.ndarray]:
+    """
+    RGB in, RGB out. Center-crops the camera frame to the template window's aspect,
+    fills the window with it, then alpha-blends the template over the photo.
+    Returns None if the template is unavailable.
+    If crop_to_frame, only the gold frame's bounding box is returned.
+    """
+    cache = _get_template_cache()
+    out_w = int(out_w or PREVIEW_W)
+    out_h = int(out_h or PREVIEW_H)
+    d = cache.get(out_w, out_h)
+    if d is None:
+        return None
+
+    x0, y0, x1, y1 = d["win"]
+    box_w, box_h = x1 - x0, y1 - y0
+
+    # Center crop to the window aspect (no stretching)
     f_h, f_w = frame_rgb.shape[:2]
     target_aspect = box_w / box_h
-    frame_aspect = f_w / f_h
-
-    if frame_aspect > target_aspect:
+    if f_w / f_h > target_aspect:
         new_w = int(f_h * target_aspect)
-        start_x = int((f_w - new_w) // 2)
-        cropped_video = frame_rgb[:, start_x:start_x + new_w]
+        sx = (f_w - new_w) // 2
+        cropped = frame_rgb[:, sx:sx + new_w]
     else:
         new_h = int(f_w / target_aspect)
-        start_y = int((f_h - new_h) // 2)
-        cropped_video = frame_rgb[start_y:start_y + new_h, :]
+        sy = (f_h - new_h) // 2
+        cropped = frame_rgb[sy:sy + new_h, :]
 
-    # 5. שינוי גודל המצלמה לאיכות חדה
-    resized_video = cv2.resize(cropped_video, (box_w, box_h), interpolation=cv2.INTER_CUBIC)
+    interp = cv2.INTER_AREA if cropped.shape[1] >= box_w else cv2.INTER_LINEAR
+    video = cv2.resize(cropped, (box_w, box_h), interpolation=interp)
 
-    # 6. התיקון הקריטי: המרת ריבוע הווידאו בלבד מ-RGB ל-BGR כדי שיתאים לרקע הכתום
-    resized_video_bgr = cv2.cvtColor(resized_video, cv2.COLOR_RGB2BGR)
+    # out = template_premultiplied + video * (1 - alpha)
+    out = d["tpl_pre"].copy()
+    blended = d["tpl_win"] + (video.astype(np.uint16) * d["inv_alpha"] + 127) // 255
+    out[y0:y1, x0:x1] = np.minimum(blended, 255).astype(np.uint8)
 
-    # 7. השתלת המצלמה המתוקנת לתוך התבנית
-    output_image = template_bgr.copy()
-    output_image[y_min:y_max, x_min:x_max] = resized_video_bgr
+    if crop_to_frame:
+        cx0, cy0, cx1, cy1 = d["crop"]
+        out = np.ascontiguousarray(out[cy0:cy1, cx0:cx1])
+    return out
 
-    return output_image
-    
+
+def render_capture_image(frame_rgb: np.ndarray) -> np.ndarray:
+    """
+    Image saved/uploaded after a capture (RGB in, RGB out): the gold frame with the photo inside,
+    rendered at CAPTURE_TEMPLATE_W. Falls back to the plain frame if the template mode is off/missing.
+    """
+    if USE_CUSTOM_TEMPLATE_MODE:
+        cache = _get_template_cache()
+        if cache.ok:
+            out_w = int(CAPTURE_TEMPLATE_W)
+            out_h = int(round(out_w / cache.aspect))
+            res = apply_custom_template_with_video(frame_rgb, out_w, out_h, crop_to_frame=True)
+            if res is not None:
+                return res
+    return apply_frame_and_logo(frame_rgb)
+
+
 def apply_frame_and_logo(frame_rgb: np.ndarray) -> np.ndarray:
     """
     Main entry point for overlays. Resolves whether to use the custom full-screen template
@@ -508,12 +644,10 @@ def apply_frame_and_logo(frame_rgb: np.ndarray) -> np.ndarray:
     """
     # ---- Custom Template Mode ----
     if USE_CUSTOM_TEMPLATE_MODE:
-        if os.path.exists(MOCKUP_PNG):
-            combined_result = apply_custom_template_with_video(frame_rgb, MOCKUP_PNG)
-            if combined_result is not None:
-                return combined_result
-        else:
-            log.warning("Custom mode enabled but asset missing: %s. Falling back to clean resize.", MOCKUP_PNG)
+        combined_result = apply_custom_template_with_video(frame_rgb, int(PREVIEW_W), int(PREVIEW_H))
+        if combined_result is not None:
+            return combined_result
+        log.warning("Custom mode enabled but template unusable: %s. Falling back to clean resize.", MOCKUP_PNG)
 
     # ---- Clean Live Preview / Fallback Mode ----
     # If custom template is disabled or missing, stretch the clean camera feed

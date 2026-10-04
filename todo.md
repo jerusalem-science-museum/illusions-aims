@@ -1,0 +1,4 @@
+- change image saved & uploaded to only contain the frame portion of the image instead of the full thumbnail
+- fix bgr bug where channels are swapped
+- use thumbnail.png instead of custom thumbnail_big.png
+- add qr code after picture is sent at a moving queue at the location of the crosshairs at the bottom right of the image. after the 4 spots are filled overwrite the oldest qr code. after 2 minutes of no use reset and remove qrs.
