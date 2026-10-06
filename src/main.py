@@ -1,3 +1,11 @@
+"""
+Ames room exhibit: live camera inside a branded template, shown fullscreen through ffplay.
+Covering the ROI starts a countdown and flash, then the photo is uploaded to Google Drive
+and its QR code appears in the template's QR slots.
+
+Per frame, all work happens at camera resolution until a single resize into the template
+window, and the output is one reused buffer written to ffplay without copies.
+"""
 import datetime
 import math
 import signal
@@ -5,564 +13,283 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import cv2
 import numpy as np
 
-from constant import *
+import constant as cfg
 from log import get_logger
-from graphics import apply_flip, apply_frame_and_logo, render_capture_image, make_qr_image, ROIManager
 from qr_queue import QRQueue
-
-# Google upload helpers
-try:
-    from google_upload import (
-        GoogleDriveUploader,
-        GoogleSheetsLogger,
-        CaptureStorage,
-        extract_spreadsheet_id,
-        _read_first_nonempty_line,
-    )
-except Exception:
-    GoogleDriveUploader = None
-    GoogleSheetsLogger = None
-    CaptureStorage = None
-    extract_spreadsheet_id = None
-    _read_first_nonempty_line = None
-
+from render import Template, draw_countdown, draw_roi, flash, flip, make_qr
+from roi_detector import ROITriggerDetector, roi_mean, roi_rect
+from google_upload import DriveUploader, SheetsLogger, resolve_spreadsheet_id
 
 log = get_logger()
 
 
-class CameraGrabber:
-    """Continuously read the camera and keep only the latest frame."""
+class Camera:
+    """Reads the camera on a background thread and keeps only the latest frame."""
 
-    def __init__(self, index: int = 0):
+    def __init__(self, index: int):
         backend = cv2.CAP_V4L2 if hasattr(cv2, "CAP_V4L2") else cv2.CAP_ANY
         self.cap = cv2.VideoCapture(index, backend)
         if not self.cap.isOpened() and backend != cv2.CAP_ANY:
             self.cap = cv2.VideoCapture(index, cv2.CAP_ANY)
-
         if not self.cap.isOpened():
             raise RuntimeError(f"Cannot open the camera on index {index}.")
 
-        self.lock = threading.Lock()
-        self.last_frame = None
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        self.cap.set(cv2.CAP_PROP_FPS, cfg.PREVIEW_FPS)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.CAMERA_RESOLUTION[0])
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.CAMERA_RESOLUTION[1])
+        log.info("Camera opened: %dx%d @ %s fps",
+                 self.cap.get(cv2.CAP_PROP_FRAME_WIDTH), self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
+                 self.cap.get(cv2.CAP_PROP_FPS))
+        if cfg.CAM_LOCK_AUTO:
+            self._lock_auto()
+
+        # cap.read() returns a new array each time and nobody mutates it, so no copies are needed.
+        self.latest: Optional[np.ndarray] = None
         self.running = True
-        self.read_fail_count = 0
-
-        self._safe_set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self._safe_set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self._safe_set(cv2.CAP_PROP_FPS, 25)
-        self._safe_set(cv2.CAP_PROP_FRAME_WIDTH, int(CAMERA_RESOLUTION[0]))
-        self._safe_set(cv2.CAP_PROP_FRAME_HEIGHT, int(CAMERA_RESOLUTION[1]))
-
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
 
-        actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
-        fourcc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
-        fourcc_str = "".join(chr((fourcc >> (8 * i)) & 0xFF) for i in range(4)).strip("\x00")
-        log.info(
-            "Camera opened. requested=%sx%s actual=%sx%s fps=%s fourcc=%s",
-            CAMERA_RESOLUTION[0],
-            CAMERA_RESOLUTION[1],
-            actual_w,
-            actual_h,
-            actual_fps,
-            fourcc_str or "?",
-        )
+    def _lock_auto(self):
+        """Freezes exposure, gain, white balance and focus so scene changes can't trigger the ROI.
 
-    def _safe_set(self, prop: int, value) -> None:
-        try:
-            self.cap.set(prop, value)
-        except Exception:
-            pass
+        Auto exposure runs briefly first so the frozen value suits the room's lighting.
+        Support varies by camera and driver, so every step is best effort.
+        """
+        cap = self.cap
+        end = time.time() + cfg.CAM_LOCK_SETTLE_S
+        while time.time() < end:
+            cap.read()
+
+        exposure = cfg.CAM_EXPOSURE if cfg.CAM_EXPOSURE is not None else cap.get(cv2.CAP_PROP_EXPOSURE)
+        gain = cfg.CAM_GAIN if cfg.CAM_GAIN is not None else cap.get(cv2.CAP_PROP_GAIN)
+        wb = cap.get(cv2.CAP_PROP_WB_TEMPERATURE)
+
+        # V4L2 uses 1 for manual exposure, DirectShow uses 0.25.
+        manual = 1 if hasattr(cv2, "CAP_V4L2") and cap.getBackendName() == "V4L2" else 0.25
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, manual)
+        cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
+        cap.set(cv2.CAP_PROP_GAIN, gain)
+        cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+        if wb > 0:
+            cap.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
+        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+        log.info("Camera locked: auto_exposure=%s exposure=%s gain=%s wb=%s",
+                 cap.get(cv2.CAP_PROP_AUTO_EXPOSURE), cap.get(cv2.CAP_PROP_EXPOSURE),
+                 cap.get(cv2.CAP_PROP_GAIN), cap.get(cv2.CAP_PROP_WB_TEMPERATURE))
 
     def _reader(self):
+        fails = 0
         while self.running:
             ok, frame = self.cap.read()
-            if ok and frame is not None:
-                self.read_fail_count = 0
-                with self.lock:
-                    self.last_frame = frame
+            if ok:
+                fails = 0
+                self.latest = frame
             else:
-                self.read_fail_count += 1
-                if self.read_fail_count in (1, 30, 120):
-                    log.warning(
-                        "Camera read failed (%s). Retrying...", self.read_fail_count
-                    )
+                fails += 1
+                if fails in (1, 30, 120):
+                    log.warning("Camera read failed (%d). Retrying...", fails)
                 time.sleep(0.01)
-
-    def get_latest_frame(self) -> Optional[np.ndarray]:
-        with self.lock:
-            return None if self.last_frame is None else self.last_frame.copy()
 
     def release(self):
         self.running = False
-        if self.thread.is_alive():
-            self.thread.join(timeout=1)
+        self.thread.join(timeout=1)
         self.cap.release()
 
 
-class FFplayViewer:
-    """Display RGB frames through ffplay fullscreen without Tkinter."""
+class FFplay:
+    """Fullscreen ffplay fed raw BGR frames on stdin."""
 
-    def __init__(self, width: int, height: int, fps: int = 25):
-        self.width = int(width)
-        self.height = int(height)
-        self.fps = int(fps)
-        self.proc: Optional[subprocess.Popen] = None
-        self.closed_by_user = False
-
-    def start(self):
-        cmd = [
-            "ffplay",
-            "-loglevel",
-            "error",
-            "-nostats",
-            "-fs",
-            "-fflags",
-            "nobuffer",
-            "-flags",
-            "low_delay",
-            "-framedrop",
-            "-sync",
-            "ext",
-            "-f",
-            "rawvideo",
-            "-pixel_format",
-            "rgb24",
-            "-video_size",
-            f"{self.width}x{self.height}",
-            "-framerate",
-            str(self.fps),
-            "-i",
-            "-",
-        ]
+    def __init__(self, w: int, h: int, fps: int):
         self.proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            bufsize=0,
+            ["ffplay", "-loglevel", "error", "-nostats", "-fs",
+             "-fflags", "nobuffer", "-flags", "low_delay", "-framedrop", "-sync", "ext",
+             "-f", "rawvideo", "-pixel_format", "bgr24", "-video_size", f"{w}x{h}",
+             "-framerate", str(fps), "-i", "-"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, bufsize=0,
         )
-        self.closed_by_user = False
         log.info("ffplay started.")
 
-    def is_alive(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
-
-    def write(self, frame_rgb: np.ndarray) -> bool:
-        if self.proc is None or self.proc.stdin is None:
-            self.closed_by_user = True
-            return False
+    def write(self, frame: np.ndarray) -> bool:
+        """Write one frame; False once ffplay is gone (window closed with q/Esc)."""
         if self.proc.poll() is not None:
-            self.closed_by_user = True
             return False
+        view = memoryview(frame).cast("B")
         try:
-            self.proc.stdin.write(frame_rgb.tobytes())
+            while view:  # an unbuffered pipe write may be partial
+                view = view[self.proc.stdin.write(view):]
             return True
         except (BrokenPipeError, OSError):
-            self.closed_by_user = True
             return False
 
     def close(self):
-        if self.proc and self.proc.stdin:
-            try:
-                self.proc.stdin.close()
-            except Exception:
-                pass
-        if self.proc:
-            try:
-                if self.proc.poll() is None:
-                    self.proc.terminate()
-                    self.proc.wait(timeout=2)
-            except Exception:
-                try:
-                    self.proc.kill()
-                except Exception:
-                    pass
-
-
-class TerminalCameraApp:
-    def __init__(self):
-        self._frame_lock = threading.Lock()
-        self._capture_lock = threading.Lock()
-        self._last_frame_rgb: Optional[np.ndarray] = None
-
-        self._running = True
-        self._sequence_running = False
-        self._capture_started = False
-        self._countdown_end: Optional[float] = None
-        self._flash_until: float = 0.0
-
-        self.preview_w = int(PREVIEW_W)
-        self.preview_h = int(PREVIEW_H)
-        self.qr_size = int(QR_FIXED_SIZE_PX)
-        self.qr_gap = int(QR_GAP)
-        self.qr_bar_h = self.qr_size + 2 * self.qr_gap
-        self.display_w = self.preview_w
-        #self.display_h = self.preview_h + self.qr_bar_h
-        if USE_CUSTOM_TEMPLATE_MODE:
-            self.display_h = self.preview_h  # בדיוק PREVIEW_H, בלי תוספות שחורות ובלי עיוותים
-        else:
-            self.display_h = self.preview_h + self.qr_bar_h
-
-        self.preview_fps = 25
-        self.frame_interval_s = 1.0 / self.preview_fps
-
-        self.storage = None
-        self.sheets_logger = None
-        self.roi_manager = ROIManager()
-        self.grabber = CameraGrabber(CAM_INDEX)
-        self.viewer = FFplayViewer(self.display_w, self.display_h, self.preview_fps)
-        self.qr_queue = QRQueue(self.preview_w, self.preview_h)
-        self.qr_output_dir = Path(LOG_FOLDER) / "qr_codes"
-        self.qr_output_dir.mkdir(parents=True, exist_ok=True)
-
-        self._init_services()
-
-    def _init_services(self):
-        sa_json = globals().get("GOOGLE_SERVICE_ACCOUNT_JSON", None)
-        folder_id = globals().get("GOOGLE_DRIVE_FOLDER_ID", None)
-        make_public = bool(globals().get("GOOGLE_DRIVE_MAKE_PUBLIC", True))
-
-        enable_shortener = bool(globals().get("ENABLE_URL_SHORTENER", False))
-        shortener_backend = str(globals().get("SHORTENER_BACKEND", "tinyurl"))
-
-        uploader = None
         try:
-            if sa_json and GoogleDriveUploader is not None:
-                uploader = GoogleDriveUploader(
-                    service_account_json=str(sa_json),
-                    folder_id=folder_id,
-                    make_public=make_public,
-                    enable_shortener=enable_shortener,
-                    shortener_backend=shortener_backend,
-                )
-                log.info("Drive uploader initialized (folder_id=%s).", folder_id)
-            else:
-                log.warning(
-                    "Drive uploader NOT initialized (missing JSON or google_upload unavailable)."
-                )
+            self.proc.stdin.close()
+            self.proc.terminate()
+            self.proc.wait(timeout=2)
         except Exception:
-            log.exception("Drive uploader initialization failed.")
+            self.proc.kill()
 
-        if uploader is not None and CaptureStorage is not None:
-            try:
-                self.storage = CaptureStorage(uploader)
-                log.info("CaptureStorage initialized.")
-            except Exception:
-                self.storage = None
-                log.exception("CaptureStorage initialization failed.")
 
-        enable_sheets = bool(globals().get("ENABLE_SHEETS_LOG", False))
-        sheet_id = globals().get("GOOGLE_SHEETS_SPREADSHEET_ID", None)
-        sheet_id_file = globals().get("GOOGLE_SHEETS_SPREADSHEET_ID_FILE", None)
-        sheet_tab = str(globals().get("GOOGLE_SHEETS_WORKSHEET_NAME", "logs"))
+class Exhibit:
+    """Rendering and the trigger → countdown → flash → capture sequence (no camera or display I/O)."""
 
-        if (
-            enable_sheets
-            and not sheet_id
-            and sheet_id_file
-            and _read_first_nonempty_line is not None
-        ):
-            raw = _read_first_nonempty_line(str(sheet_id_file))
-            if raw and extract_spreadsheet_id is not None:
-                sheet_id = extract_spreadsheet_id(raw)
+    def __init__(self, drive: Optional[DriveUploader], sheets: Optional[SheetsLogger]):
+        self.drive = drive
+        self.sheets = sheets
+        self.template = Template(cfg.MOCKUP_PNG, cfg.PREVIEW_W, cfg.PREVIEW_H)
+        self.screen = self.template.bgr.copy()  # output buffer, reused every frame
+        self.qr_queue = QRQueue(cfg.PREVIEW_W, cfg.PREVIEW_H)
+        self.detector = ROITriggerDetector()
+        self.qr_dir = Path(cfg.LOG_FOLDER) / "qr_codes"
+        self.qr_dir.mkdir(parents=True, exist_ok=True)
 
-        if enable_sheets and sa_json and sheet_id and GoogleSheetsLogger is not None:
-            try:
-                self.sheets_logger = GoogleSheetsLogger(
-                    service_account_json=str(sa_json),
-                    spreadsheet_id=str(sheet_id),
-                    worksheet_name=str(sheet_tab),
-                )
-                log.info("Sheets logger initialized (tab=%s).", sheet_tab)
-            except Exception:
-                self.sheets_logger = None
-                log.exception("GoogleSheetsLogger initialization failed.")
+        self.countdown_end: Optional[float] = None  # set while counting down / flashing
+        self.capturing = False                      # set while the capture thread runs
 
-    def _log_sheet_event(self, event: str, local_name: str, url: str, note: str):
-        if self.sheets_logger is None:
-            return
-        try:
+    def render(self, frame: np.ndarray, now: float) -> np.ndarray:
+        """Advance the sequence and draw one screen frame from a raw camera frame."""
+        flash_end = None
+        if self.countdown_end is not None:
+            flash_end = self.countdown_end + cfg.FLASH_DURATION_S
+            if now >= flash_end:
+                self.countdown_end = flash_end = None
+                self.capturing = True
+                threading.Thread(target=self._capture, args=(frame,), daemon=True).start()
+
+        view = flip(frame) if cfg.FLIP_PREVIEW else frame
+        rect = roi_rect(view.shape[1], view.shape[0])
+        idle = self.countdown_end is None and not self.capturing
+        ready, enabled, trigger = self.detector.update(roi_mean(view, rect), now, allow_trigger=idle)
+        if trigger:
+            log.info("ROI triggered; countdown started.")
+            self.countdown_end = now + max(1, int(cfg.COUNTDOWN_SECONDS))
+
+        video, mapping = self.template.fit(view)
+        if cfg.DRAW_ROI_RECT:
+            draw_roi(video, rect, mapping, active=ready and enabled)
+        if self.countdown_end is not None and now < self.countdown_end:
+            draw_countdown(video, math.ceil(self.countdown_end - now))
+        elif flash_end is not None:
+            flash(video)
+        self.template.blend(self.screen, video)
+
+        # Restore the template under the QR area, then draw the queue (it may have moved/cleared)
+        x0, y0, x1, y1 = self.qr_queue.bbox
+        self.screen[y0:y1, x0:x1] = self.template.bgr[y0:y1, x0:x1]
+        self.qr_queue.render(self.screen)
+        return self.screen
+
+    def _sheet(self, event: str, name: str = "", url: str = "", note: str = ""):
+        if self.sheets is not None:
             ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.sheets_logger.append_row_async([ts, event, local_name, url, note])
-        except Exception:
-            log.exception("Failed to append row to Google Sheets (event=%s).", event)
+            self.sheets.append([ts, event, name, url, note])
 
-    def start_countdown_then_capture(self, seconds: int = 3):
-        if self._sequence_running:
-            return
-        if not self._capture_lock.acquire(blocking=False):
-            return
-
-        now = time.monotonic()
-        self._sequence_running = True
-        self._capture_started = False
-        self._countdown_end = now + max(1, int(seconds))
-        self._flash_until = self._countdown_end + float(FLASH_DURATION_S)
-        log.info("Countdown started for %s seconds.", seconds)
-
-    def _maybe_start_capture_after_flash(self, now: float):
-        if not self._sequence_running or self._capture_started:
-            return
-        if self._countdown_end is None:
-            return
-        if now >= self._flash_until:
-            self._capture_started = True
-            threading.Thread(target=self.capture_flow, daemon=True).start()
-
-    def _apply_countdown_and_flash(
-        self, frame_rgb: np.ndarray, now: float
-    ) -> np.ndarray:
-        if not self._sequence_running or self._countdown_end is None:
-            return frame_rgb
-
-        if now < self._countdown_end:
-            remaining = max(1, int(math.ceil(self._countdown_end - now)))
-            text = str(remaining)
-            h, w = frame_rgb.shape[:2]
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            scale = max(1.0, min(w, h) / 250.0)
-            thickness = max(2, int(scale * 2.5))
-            (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
-            x = int((w - tw) / 2)
-            y = int((h + th) / 2)
-            cv2.putText(
-                frame_rgb,
-                text,
-                (x, y),
-                font,
-                scale,
-                (0, 0, 0),
-                thickness + 6,
-                cv2.LINE_AA,
-            )
-            cv2.putText(
-                frame_rgb,
-                text,
-                (x, y),
-                font,
-                scale,
-                (255, 255, 255),
-                thickness,
-                cv2.LINE_AA,
-            )
-            return frame_rgb
-
-        if now < self._flash_until:
-            if str(FLASH_COLOR).lower() == "black":
-                frame_rgb[:] = 0
-            else:
-                frame_rgb[:] = 255
-        return frame_rgb
-
-    def _compose_display(self, preview_bgr: np.ndarray) -> np.ndarray:
-        """
-        Combines the preview image with the bottom QR code bar.
-        Keeps original color logic to avoid color tint bugs.
-        """
-        # המרה קבועה ויחידה מ-BGR ל-RGB בדיוק כפי שהיה בקוד המקור שלך
-        preview_rgb = preview_bgr  # already RGB (app convention: RGB everywhere inside)
-
-        from constant import USE_CUSTOM_TEMPLATE_MODE
-        if USE_CUSTOM_TEMPLATE_MODE:
-            # מחזיר את הפריים המלא בדיוק כמו שהוא, ללא הוספת השטח השחור מלמטה
-            # QRs go into the template's crosshair slots (moving queue, auto-reset)
-            return self.qr_queue.render(preview_rgb)
-
-        # Non-template mode: simple black bar below the preview (QR queue slots
-        # only make sense on the template, so QRs are not drawn here).
-        qr_bar = np.zeros((self.qr_bar_h, self.display_w, 3), dtype=np.uint8)
-        return np.vstack([preview_rgb, qr_bar])
-     
-
-    def capture_flow(self):
+    def _capture(self, frame: np.ndarray):
         try:
-            with self._frame_lock:
-                frame = (
-                    None
-                    if self._last_frame_rgb is None
-                    else self._last_frame_rgb.copy()
-                )
-            if frame is None:
-                log.warning("capture_flow: last frame is None.")
+            if self.drive is None:
+                log.error("Capture requested but Google Drive is not available.")
                 return
-
-            if FLIP_CAPTURE:
-                frame = apply_flip(frame, FLIP_MODE)
-
-            if CAPTURE_APPLY_OVERLAYS:
-                frame = render_capture_image(frame)  # RGB; gold frame only, hi-res
-
-            if self.storage is None:
-                log.error(
-                    "Capture requested but storage is None (Drive not initialized)."
-                )
+            if cfg.FLIP_CAPTURE:
+                frame = flip(frame)
+            ok, jpg = cv2.imencode(".jpg", self.template.photo(frame))
+            if not ok:
+                log.error("JPEG encoding failed.")
                 return
-
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # BGR only for cv2.imwrite in storage
+            name = datetime.datetime.now().strftime("capture_%Y_%m_%d__%H_%M_%S__%f.jpg")
             try:
-                local_name, url = self.storage.save_frame_and_upload(frame_bgr)
+                url = self.drive.upload_jpeg(jpg.tobytes(), name)
             except Exception:
                 log.exception("Drive upload failed.")
-                self._log_sheet_event("UPLOAD_ERROR", "", "", "exception")
+                self._sheet("UPLOAD_ERROR", note="exception")
                 return
-
-            if not url:
-                log.error("Upload succeeded but returned an empty URL.")
-                self._log_sheet_event("URL_EMPTY", local_name, "", "")
-                return
-
-            log.info("Drive URL received: %s", url)
-            print(f"\nUPLOAD OK: {url}")
-            self._log_sheet_event("UPLOAD_OK", local_name, url, "")
+            log.info("UPLOAD OK: %s", url)
+            self._sheet("UPLOAD_OK", name, url)
 
             try:
-                qr_img = make_qr_image(url)
-                qr_rgb = np.array(qr_img.convert("RGB"), dtype=np.uint8)
-                self.qr_queue.push(qr_rgb)
-
-                stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                qr_path = self.qr_output_dir / f"qr_{stamp}.png"
-                qr_img.save(str(qr_path))
-                log.info("QR saved locally: %s", qr_path)
+                qr = make_qr(url)
+                self.qr_queue.push(qr)
+                cv2.imwrite(str(self.qr_dir / datetime.datetime.now().strftime("qr_%Y%m%d_%H%M%S.png")), qr)
             except Exception:
                 log.exception("Failed to generate QR from URL.")
-                if bool(globals().get("SHEETS_LOG_QR_EVENTS", False)):
-                    self._log_sheet_event("QR_ERROR", local_name, url, "exception")
+                if cfg.SHEETS_LOG_QR_EVENTS:
+                    self._sheet("QR_ERROR", name, url, "exception")
                 return
-
-            if bool(globals().get("SHEETS_LOG_QR_EVENTS", False)):
-                self._log_sheet_event("QR_OK", local_name, url, "")
-
+            if cfg.SHEETS_LOG_QR_EVENTS:
+                self._sheet("QR_OK", name, url)
         finally:
-            self._sequence_running = False
-            self._capture_started = False
-            self._countdown_end = None
-            self._flash_until = 0.0
-            try:
-                self.roi_manager.on_capture_done(time.monotonic())
-            except Exception as e:
-                log.error(f"Error in on_capture_done: {e}")
-            # Baseline is intentionally kept (adaptive baseline follows drift);
-            # resetting it kept the ROI red for BASELINE_SECONDS after each capture.
-            # -----------------------------------------------------------
-            try:
-                self._capture_lock.release()
-            except Exception:
-                pass
+            self.detector.disable_for(cfg.ROI_DISABLE_AFTER_CAPTURE_S, time.monotonic())
+            self.capturing = False
 
-    def stop(self):
-        self._running = False
 
-    def close(self):
-        self._running = False
-        try:
-            self.grabber.release()
-        except Exception:
-            pass
-        try:
-            if self.storage:
-                self.storage.close()
-        except Exception:
-            pass
-        try:
-            self.viewer.close()
-        except Exception:
-            pass
-
-    def run(self):
-        print("App run.")
-        print(
-            "Press q or Esc to close the ffplay window. Ctrl+C in terminal to stop app."
+def init_google():
+    """Drive uploader and Sheets logger; either is None if unavailable (the exhibit still runs)."""
+    drive = sheets = None
+    try:
+        drive = DriveUploader(
+            cfg.GOOGLE_SERVICE_ACCOUNT_JSON,
+            folder_id=cfg.GOOGLE_DRIVE_FOLDER_ID,
+            make_public=cfg.GOOGLE_DRIVE_MAKE_PUBLIC,
+            shortener_backend=cfg.SHORTENER_BACKEND if cfg.ENABLE_URL_SHORTENER else None,
         )
-        print("The ROI, the countdown, the flash and the QR will be screen in ffplay.")
+        log.info("Google Drive ready.")
+    except Exception:
+        log.exception("Google Drive not available; captures will not be uploaded.")
 
-        self.viewer.start()
-        next_frame_time = time.monotonic()
+    if cfg.ENABLE_SHEETS_LOG:
+        sheet_id = resolve_spreadsheet_id(cfg.GOOGLE_SHEETS_SPREADSHEET_ID, cfg.GOOGLE_SHEETS_SPREADSHEET_ID_FILE)
+        if sheet_id:
+            try:
+                sheets = SheetsLogger(cfg.GOOGLE_SERVICE_ACCOUNT_JSON, sheet_id, cfg.GOOGLE_SHEETS_WORKSHEET_NAME)
+                log.info("Google Sheets logging ready (tab=%s).", cfg.GOOGLE_SHEETS_WORKSHEET_NAME)
+            except Exception:
+                log.exception("Google Sheets logging not available.")
+    return drive, sheets
 
-        try:
-            while self._running:
-                if not self.viewer.is_alive():
-                    log.info("ffplay is no longer running. Exiting cleanly.")
-                    break
-                frame_bgr = self.grabber.get_latest_frame()
-                if frame_bgr is None:
-                    time.sleep(0.01)
-                    continue
 
-                frame_h, frame_w = frame_bgr.shape[:2]
-                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                with self._frame_lock:
-                    self._last_frame_rgb = frame_rgb.copy()
+def main():
+    log.info("Starting. Press q or Esc in the ffplay window to quit, or Ctrl+C here.")
+    exhibit = Exhibit(*init_google())
+    camera = Camera(cfg.CAM_INDEX)
+    viewer = FFplay(cfg.PREVIEW_W, cfg.PREVIEW_H, cfg.PREVIEW_FPS)
 
-                interp = (
-                    cv2.INTER_AREA
-                    if (self.preview_w <= frame_w and self.preview_h <= frame_h)
-                    else cv2.INTER_LINEAR
-                )
-                small = cv2.resize(
-                    frame_rgb, (self.preview_w, self.preview_h), interpolation=interp
-                )
+    running = True
 
-                if FLIP_PREVIEW:
-                    small = apply_flip(small, FLIP_MODE)
+    def stop(signum, _frame):
+        nonlocal running
+        log.info("Signal received: %s", signum)
+        running = False
 
-                now = time.monotonic()
-                allow_trigger = not self._sequence_running
-                small, should_trigger = self.roi_manager.process_frame(
-                    frame_w=frame_w,
-                    frame_h=frame_h,
-                    preview_w=self.preview_w,
-                    preview_h=self.preview_h,
-                    preview_rgb=small,
-                    now=now,
-                    allow_trigger=allow_trigger,
-                )
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
 
-                if should_trigger:
-                    self.start_countdown_then_capture(int(COUNTDOWN_SECONDS))
-
-                small = self._apply_countdown_and_flash(small, now)
-
-                if PREVIEW_APPLY_OVERLAYS:
-                    small = apply_frame_and_logo(small)
-
-                display_rgb = self._compose_display(small)
-                if not self.viewer.write(display_rgb):
-                    log.info("ffplay closed by user. Stopping application loop.")
-                    self.stop()
-                    break
-
-                self._maybe_start_capture_after_flash(now)
-
-                next_frame_time += self.frame_interval_s
-                sleep_s = next_frame_time - time.monotonic()
-                if sleep_s > 0:
-                    time.sleep(sleep_s)
-                else:
-                    next_frame_time = time.monotonic()
-
-        finally:
-            self.close()
+    interval = 1.0 / cfg.PREVIEW_FPS
+    next_t = time.monotonic()
+    try:
+        while running:
+            frame = camera.latest
+            if frame is None:
+                time.sleep(0.01)
+                continue
+            if not viewer.write(exhibit.render(frame, time.monotonic())):
+                log.info("ffplay closed. Exiting.")
+                break
+            next_t += interval
+            delay = next_t - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            else:
+                next_t = time.monotonic()  # fell behind: don't try to catch up
+    finally:
+        camera.release()
+        viewer.close()
 
 
 if __name__ == "__main__":
-    app = TerminalCameraApp()
-
-    def _handle_signal(signum, _frame):
-        log.info("Signal received: %s", signum)
-        app.stop()
-
-    signal.signal(signal.SIGINT, _handle_signal)
-    signal.signal(signal.SIGTERM, _handle_signal)
-
-    log.info("Starting terminal camera application (ffplay backend).")
-    app.run()
+    main()

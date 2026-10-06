@@ -32,32 +32,40 @@ python3 main.py
 
 Runtime requirements: `ffplay` (from ffmpeg) must be on PATH, and the camera must be at `CAM_INDEX`. Python deps are in `requirements.txt` (the root and `src/` copies differ slightly; `setup.sh` installs from the one next to it). The app exits when the ffplay window is closed (q or Esc) or on SIGINT/SIGTERM.
 
+To check rendering speed or output without the camera or ffplay, call `Exhibit(None, None).render(frame, t)` with a synthetic 640×480 BGR frame.
+
 ## Architecture
 
-**Display is ffplay, not Tkinter.** `main.py`'s `TerminalCameraApp` renders every frame as a raw RGB numpy array and pipes it to an `ffplay` subprocess's stdin (`FFplayViewer`). Any drawing (ROI box, countdown digits, flash, template, QR) must be baked into the frame array. Tkinter-era code is still present but unused: `QRStrip`, `CountdownController`, `compute_layout` and `CameraCanvasPlacer` in `graphics.py`, and the Tkinter mentions in the root `README.md`.
+**Display is ffplay.** `main.py` renders every frame into one reused 1920×1080 buffer and writes it, without copying, to an `ffplay` subprocess's stdin (`-pixel_format bgr24`). Everything on screen (ROI box, countdown, flash, template, QRs) is drawn into that buffer.
 
-**Threads:**
-- `CameraGrabber` has a background thread that keeps only the latest camera frame.
-- The main loop in `run()` is paced to about 25 fps. It resizes and flips the frame, runs `ROIManager.process_frame` (draws the ROI and decides whether to trigger), applies the countdown and flash, applies overlays, composes the frame and writes it to ffplay.
-- After the flash, `capture_flow` runs on a separate thread: flip, overlays, save a temp JPEG, Drive upload, optional shortener, generate the QR, append to the QR history, then Sheets logging. Its `finally` block always resets the sequence flags, disables the ROI for `ROI_DISABLE_AFTER_CAPTURE_S` and resets the ROI baseline.
+**Images are BGR everywhere** (OpenCV's native order): camera frames, the template, the ffplay input and the saved JPEG. There are no color conversions anywhere, and it should stay that way. Draw colors are `(B, G, R)`.
 
-**ROI trigger** (`roi_detector.py`, UI-agnostic):
-1. Averages the ROI's mean RGB over `BASELINE_SECONDS`.
-2. Triggers when the RGB distance from that baseline stays above `TRIGGER_DIST_THRESHOLD` for `HOLD_SECONDS`.
-3. Then applies a cooldown and a disable window.
+**Modules:**
+- `main.py`:
+  - `Camera` keeps only the latest frame, using a background thread.
+  - `FFplay` is the display.
+  - `Exhibit` holds the rendering and the trigger → countdown → flash → capture sequence. It does no I/O.
+  - `main()` is the loop, paced to `PREVIEW_FPS`.
+- `render.py`: `Template` loads `MOCKUP_PNG` once, premultiplied, at the screen size. The picture window is the bounding box of its transparent area.
+  - `fit()` center-crops the camera frame to the window's aspect ratio without stretching, then resizes it once.
+  - `blend()` puts the result under the template.
+  - `photo()` renders the same thing and crops it to the gold frame, so the live preview matches the uploaded photo.
+  - The file also has the countdown, flash, ROI box and QR helpers.
+- `roi_detector.py`: computes the ROI rectangle and mean color (in camera pixels, on the mirrored image) and contains `ROITriggerDetector`.
+  - Baseline: averaged over `BASELINE_SECONDS`.
+  - Trigger: the RGB distance stays above `max(TRIGGER_DIST_THRESHOLD, NOISE_SIGMA_MULT × noise)` for `HOLD_SECONDS`.
+  - Also handles the adaptive baseline, the grace period, the cooldown and the disable window after a capture.
+- `qr_queue.py`: the newest QR goes in the big slot and older ones slide through the 3 archive cells (`QR_SLOT_*`). The queue clears after `QR_QUEUE_RESET_S`. Before the queue draws each frame, the screen restores the template under `QRQueue.bbox`.
+- `google_upload.py`:
+  - `DriveUploader` uploads JPEG bytes from memory over one shared, locked httplib2 connection, with a 30 s timeout and a 45 s keepalive. The "anyone with the link" permission is set asynchronously.
+  - `SheetsLogger` appends rows from its own worker thread.
 
-ROI coordinates are in camera space and are mapped to preview space.
+**Per-frame work stays at camera resolution** (flip, ROI, crop) until the single resize into the window. Only the window and the QR area of the output buffer are rewritten each frame. Keep it that way: per-frame numpy work at full HD is what made the Pi slow.
 
-**Template mode** (`USE_CUSTOM_TEMPLATE_MODE = True`, the current default): `apply_custom_template_with_video` pastes a center-cropped camera image into a hardcoded pixel box (`y 90–410, x 85–620`) of `MOCKUP_PNG`, resized to 900×506. The `TEMPLATE_BOXES` and `DYNAMIC_QR_*` constants are not used for this. In this mode the display is exactly `PREVIEW_W × PREVIEW_H` and no QR strip is shown on screen. QR history is collected (`_push_qr_to_history` / `_build_qr_strip`) but not yet composited into the output; this is what the `feat-qr-code-w-graphics` branch is working on.
+**Capture:** when the flash ends, `_capture` runs on a thread with that frame. It flips the frame, renders `Template.photo`, encodes the JPEG and uploads it, pushes the QR, saves the QR PNG to `src/logs/qr_codes/` and logs to Sheets. Its `finally` block disables the ROI for `ROI_DISABLE_AFTER_CAPTURE_S`.
 
-**Color channels are a recurring trap.** The pipeline mostly carries RGB arrays, even in variables named `*_bgr`. The template is loaded with `cv2.imread` (BGR) and returned as-is, and only the pasted video crop is converted RGB→BGR to match. Check channel order end to end before changing any conversion; the Hebrew comments in `graphics.py` and `main.py` describe earlier tint fixes.
+**Google services fail soft.** If init fails, the error is logged, `drive`/`sheets` stay `None` and the exhibit still runs, but captures are not uploaded. The Sheets ID comes from `GOOGLE_SHEETS_SPREADSHEET_ID` or the first line of `keys/sheet_id.txt` (an ID or a full URL).
 
-**Non-template branch is broken:** when `USE_CUSTOM_TEMPLATE_MODE = False`, `_compose_display` references `self.qr_lock`, `self.qr_list` and `self.qr_manager`, which are never defined.
+**Configuration:** all tunables are in `src/constant.py`, imported as `cfg`.
 
-**Google services fail soft.** `google_upload` imports are wrapped in try/except. Missing keys or a failed init only log warnings, and captures are then skipped with `storage is None`. The Sheets ID comes from `GOOGLE_SHEETS_SPREADSHEET_ID` or from the first line of `keys/sheet_id.txt` (an ID or full URL).
-
-**Configuration:** all tunables (camera, ROI, timing, overlays, flip, QR, Google, logging) are module-level constants in `src/constant.py`, pulled in with `from constant import *`. `main.py` also reads some of them with `globals().get(...)`.
-
-**Logging:** `log.py` provides a custom date-based rotating handler. Files are named `log_YYYY-MM-DD[(n)][_to_YYYY-MM-DD].txt`, rotate at 1 MB and keep at most `BACKUP_COUNT` files. `google_upload.py` uses `print` instead of the logger.
-
-Comments in the code are a mix of English, Hebrew and French.
+**Logging:** `log.py` uses the stdlib `RotatingFileHandler` (`src/logs/log.txt`, 1 MB per file, `BACKUP_COUNT` files in total) and also logs to the console.
