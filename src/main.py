@@ -9,6 +9,7 @@ window, and the output is one reused buffer written to ffplay without copies.
 import argparse
 import datetime
 import math
+import os
 import signal
 import subprocess
 import threading
@@ -121,6 +122,9 @@ class FFplay:
              "-f", "rawvideo", "-pixel_format", "bgr24", "-video_size", f"{w}x{h}",
              "-framerate", str(fps), "-i", "-"],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, bufsize=0,
+            # SDL's software renderer scales every frame to fullscreen on the CPU (over a core on a Pi 3B);
+            # GLES2 does it on the GPU. Set SDL_RENDER_DRIVER in the environment to override.
+            env={**os.environ, "SDL_RENDER_DRIVER": os.environ.get("SDL_RENDER_DRIVER", "opengles2")},
         )
         log.info("ffplay started.")
 
@@ -339,6 +343,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    # cv2.resize splits work across OpenCV's thread pool and waits for every worker. With ffplay and the
+    # camera decode keeping the Pi's 4 cores busy, a worker is often descheduled and the whole resize stalls.
+    cv2.setNumThreads(1)
     log.info("Starting%s%s. Press q or Esc in the ffplay window to quit, or Ctrl+C here.",
              " OFFLINE" if args.offline else "", " with ROI debug" if args.debug else "")
     google = (None, None) if args.offline else init_google()
