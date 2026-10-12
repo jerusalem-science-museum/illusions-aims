@@ -54,6 +54,7 @@ class Camera:
 
         # cap.read() returns a new array each time and nobody mutates it, so no copies are needed.
         self.latest: Optional[np.ndarray] = None
+        self.frames = 0  # frames read so far, for the FPS log
         self.running = True
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
@@ -93,6 +94,7 @@ class Camera:
             if ok:
                 fails = 0
                 self.latest = frame
+                self.frames += 1
             else:
                 fails += 1
                 if fails in (1, 30, 120):
@@ -250,6 +252,39 @@ class Exhibit:
             self.capturing = False
 
 
+class FPSLog:
+    """Logs the output and camera frame rates, the average render and ffplay write times, and the CPU temperature."""
+
+    def __init__(self, period: float):
+        self.period = period
+        self._reset(time.monotonic(), 0)
+
+    def _reset(self, now: float, cam_frames: int):
+        self.start, self.cam0 = now, cam_frames
+        self.n, self.render_s, self.write_s = 0, 0.0, 0.0
+
+    def tick(self, render_s: float, write_s: float, cam_frames: int) -> None:
+        self.n += 1
+        self.render_s += render_s
+        self.write_s += write_s
+        now = time.monotonic()
+        if self.period <= 0 or now - self.start < self.period:
+            return
+        span = now - self.start
+        log.info("FPS out %.1f (target %d), camera %.1f | render %.1f ms, write %.1f ms%s",
+                 self.n / span, cfg.PREVIEW_FPS, (cam_frames - self.cam0) / span,
+                 1000 * self.render_s / self.n, 1000 * self.write_s / self.n, _cpu_temp())
+        self._reset(now, cam_frames)
+
+
+def _cpu_temp() -> str:
+    try:  # Linux / Raspberry Pi
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            return f" | CPU {int(f.read()) / 1000:.0f} C"
+    except (OSError, ValueError):
+        return ""
+
+
 def init_google():
     """Drive uploader and Sheets logger; either is None if unavailable (the exhibit still runs)."""
     drive = sheets = None
@@ -307,15 +342,20 @@ def main():
 
     interval = 1.0 / cfg.PREVIEW_FPS
     next_t = time.monotonic()
+    fps = FPSLog(cfg.FPS_LOG_SECONDS)
     try:
         while running:
             frame = camera.latest
             if frame is None:
                 time.sleep(0.01)
                 continue
-            if not viewer.write(exhibit.render(frame, time.monotonic())):
+            t0 = time.monotonic()
+            out = exhibit.render(frame, t0)
+            t1 = time.monotonic()
+            if not viewer.write(out):
                 log.info("ffplay closed. Exiting.")
                 break
+            fps.tick(t1 - t0, time.monotonic() - t1, camera.frames)
             next_t += interval
             delay = next_t - time.monotonic()
             if delay > 0:

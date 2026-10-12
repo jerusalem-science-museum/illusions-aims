@@ -54,6 +54,8 @@ class ROIDebug:
         self._ref_img: Optional[np.ndarray] = None
         self._cur_img: Optional[np.ndarray] = None
         self._next_csv = 0.0
+        self._last_now: Optional[float] = None
+        self.fps = 0.0  # smoothed rate of update() calls = output frame rate
 
         os.makedirs(cfg.LOG_FOLDER, exist_ok=True)
         self.trigger_dir = os.path.join(cfg.LOG_FOLDER, "roi_triggers")
@@ -68,6 +70,10 @@ class ROIDebug:
 
     def update(self, patch: np.ndarray, now: float, state: str) -> None:
         """Compute the metrics for this frame (call after detector.update) and log them to the CSV."""
+        if self._last_now is not None and now > self._last_now:
+            inst = 1.0 / (now - self._last_now)
+            self.fps = inst if self.fps == 0 else 0.9 * self.fps + 0.1 * inst
+        self._last_now = now
         det = self.detector
         ref = det.reference
         self._cur_img = patch
@@ -148,7 +154,8 @@ class ROIDebug:
         hot, ok = (80, 80, 255), (200, 255, 200)
         above = s["dist"] >= s["thr"] > 0
         lines = [
-            (f"state: {s['state']}", (255, 255, 255)),
+            (f"state: {s['state']}   fps {self.fps:4.1f} / {cfg.PREVIEW_FPS}",
+             (255, 255, 255) if self.fps >= 0.9 * cfg.PREVIEW_FPS else hot),
             (f"mean dist {s['dist']:6.1f}  thr {s['thr']:5.1f}  noise {s['noise']:4.1f}", hot if above else ok),
             (f"cur  BGR {_vec(s['cur'])}   luma {s['cur_luma']:5.1f}", (255, 255, 255)),
             (f"base BGR {_vec(s['base'])}   luma {_fmt(s.get('ref_luma'), 5, 1)}", (255, 255, 255)),

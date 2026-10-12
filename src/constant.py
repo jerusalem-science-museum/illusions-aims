@@ -55,6 +55,7 @@ SHEETS_LOG_QR_EVENTS = False           # Also log QR_OK / QR_ERROR rows
 LOG_FOLDER = os.path.join(os.path.dirname(os.path.realpath(__file__)), "logs")
 MAX_SIZE_PER_LOG_FILE = 1 * 1024 * 1024  # 1MB per file
 BACKUP_COUNT = 10                        # Max log files kept (log.txt + 9 rotated)
+FPS_LOG_SECONDS = 10.0                   # Log frame rate, render/write times and CPU temp this often; 0 disables
 
 # ---------------------------------------------------------
 # IMAGE FLIPPING (Mirroring)
