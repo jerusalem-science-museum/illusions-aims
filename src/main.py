@@ -164,6 +164,7 @@ class Exhibit:
         self.qr_dir = Path(cfg.LOG_FOLDER) / "qr_codes"
         self.qr_dir.mkdir(parents=True, exist_ok=True)
 
+        self.stage_s = [0.0] * 4  # time spent in detect / fit / blend / QR, summed since the last FPS log
         self.countdown_end: Optional[float] = None  # set while counting down / flashing
         self.capturing = False                      # set while the capture thread runs
 
@@ -177,6 +178,7 @@ class Exhibit:
                 self.capturing = True
                 threading.Thread(target=self._capture, args=(frame,), daemon=True).start()
 
+        t0 = time.perf_counter()
         view = flip(frame) if cfg.FLIP_PREVIEW else frame
         rect = roi_rect(view.shape[1], view.shape[0])
         idle = self.countdown_end is None and not self.capturing
@@ -192,6 +194,7 @@ class Exhibit:
                 self.debug.on_trigger()
             self.countdown_end = now + max(1, int(cfg.COUNTDOWN_SECONDS))
 
+        t1 = time.perf_counter()
         video, mapping = self.template.fit(view)
         if cfg.DRAW_ROI_RECT:
             draw_roi(video, rect, mapping, active=ready and enabled)
@@ -201,12 +204,17 @@ class Exhibit:
             flash(video)
         if self.debug:
             self.debug.draw(video)
+        t2 = time.perf_counter()
         self.template.blend(self.screen, video)
+        t3 = time.perf_counter()
 
         # Restore the template under the QR area, then draw the queue (it may have moved/cleared)
         x0, y0, x1, y1 = self.qr_queue.bbox
         self.screen[y0:y1, x0:x1] = self.template.bgr[y0:y1, x0:x1]
         self.qr_queue.render(self.screen)
+        t4 = time.perf_counter()
+        for i, d in enumerate((t1 - t0, t2 - t1, t3 - t2, t4 - t3)):
+            self.stage_s[i] += d
         return self.screen
 
     def _sheet(self, event: str, name: str = "", url: str = "", note: str = ""):
@@ -269,7 +277,7 @@ class FPSLog:
         self.start, self.cam0 = now, cam_frames
         self.n, self.render_s, self.write_s = 0, 0.0, 0.0
 
-    def tick(self, render_s: float, write_s: float, cam_frames: int) -> None:
+    def tick(self, render_s: float, write_s: float, cam_frames: int, stage_s=(0, 0, 0, 0)) -> None:
         self.n += 1
         self.render_s += render_s
         self.write_s += write_s
@@ -277,9 +285,11 @@ class FPSLog:
         if self.period <= 0 or now - self.start < self.period:
             return
         span = now - self.start
-        log.info("FPS out %.1f (target %d), camera %.1f | render %.1f ms, write %.1f ms%s",
+        log.info("FPS out %.1f (target %d), camera %.1f | render %.1f ms (detect %.1f, fit %.1f, blend %.1f, qr %.1f), write %.1f ms%s",
                  self.n / span, cfg.PREVIEW_FPS, (cam_frames - self.cam0) / span,
-                 1000 * self.render_s / self.n, 1000 * self.write_s / self.n, _cpu_temp())
+                 1000 * self.render_s / self.n, *(1000 * s / self.n for s in stage_s),
+                 1000 * self.write_s / self.n, _cpu_temp())
+        stage_s[:] = [0.0] * len(stage_s)
         self._reset(now, cam_frames)
 
 
@@ -361,7 +371,7 @@ def main():
             if not viewer.write(out):
                 log.info("ffplay closed. Exiting.")
                 break
-            fps.tick(t1 - t0, time.monotonic() - t1, camera.frames)
+            fps.tick(t1 - t0, time.monotonic() - t1, camera.frames, exhibit.stage_s)
             next_t += interval
             delay = next_t - time.monotonic()
             if delay > 0:
