@@ -13,9 +13,13 @@ def roi_rect(frame_w: int, frame_h: int) -> Tuple[int, int, int, int]:
     return x0, y0, min(frame_w, x0 + max(1, cfg.ROI_W)), min(frame_h, y0 + max(1, cfg.ROI_H))
 
 
-def roi_mean(frame: np.ndarray, rect: Tuple[int, int, int, int]) -> np.ndarray:
+def roi_patch(frame: np.ndarray, rect: Tuple[int, int, int, int]) -> np.ndarray:
     x0, y0, x1, y1 = rect
-    return frame[y0:y1, x0:x1].reshape(-1, 3).mean(axis=0).astype(np.float32)
+    return frame[y0:y1, x0:x1]
+
+
+def roi_mean(frame: np.ndarray, rect: Tuple[int, int, int, int]) -> np.ndarray:
+    return roi_patch(frame, rect).reshape(-1, 3).mean(axis=0).astype(np.float32)
 
 
 class ROITriggerDetector:
@@ -31,6 +35,13 @@ class ROITriggerDetector:
         self._baseline_samples = []
         self._baseline_mean: Optional[np.ndarray] = None
         self._baseline_noise = 0.0   # std-based noise floor (vector norm)
+        # Reference ROI pixels, kept in step with the baseline mean (only when update() gets a patch).
+        # Used by the debug view; the trigger itself only looks at the mean.
+        self.reference: Optional[np.ndarray] = None
+        self._ref_sum: Optional[np.ndarray] = None
+        self._ref_n = 0
+        self.last_dist = 0.0
+        self.last_thr = 0.0
         self._last_ts: Optional[float] = None
         self._below_since: Optional[float] = None
         self._active_since: Optional[float] = None
@@ -54,18 +65,36 @@ class ROITriggerDetector:
     def disable_for(self, seconds: float, now: float) -> None:
         self._disabled_until = max(self._disabled_until, now + seconds)
 
-    def update(self, mean: np.ndarray, now: float, allow_trigger: bool) -> Tuple[bool, bool, bool]:
-        """Returns (baseline_ready, roi_enabled, should_trigger). should_trigger is True once per trigger."""
+    @property
+    def baseline_mean(self) -> Optional[np.ndarray]:
+        return self._baseline_mean
+
+    @property
+    def baseline_noise(self) -> float:
+        return self._baseline_noise
+
+    def update(self, mean: np.ndarray, now: float, allow_trigger: bool,
+               patch: Optional[np.ndarray] = None) -> Tuple[bool, bool, bool]:
+        """Returns (baseline_ready, roi_enabled, should_trigger). should_trigger is True once per trigger.
+
+        patch (the ROI pixels) is optional; when given, a reference patch is kept for the debug view.
+        """
         # Baseline acquisition
         if self._baseline_mean is None:
             if self._baseline_start is None:
                 self._baseline_start = now
             self._baseline_samples.append(mean)
+            if patch is not None:
+                self._ref_sum = patch.astype(np.float32) + (0 if self._ref_sum is None else self._ref_sum)
+                self._ref_n += 1
             if now - self._baseline_start >= cfg.BASELINE_SECONDS:
                 arr = np.stack(self._baseline_samples)
                 self._baseline_mean = arr.mean(axis=0).astype(np.float32)
                 self._baseline_noise = float(np.linalg.norm(arr.std(axis=0)))
                 self._baseline_samples = []
+                if self._ref_n:
+                    self.reference = self._ref_sum / self._ref_n
+                    self._ref_sum, self._ref_n = None, 0
                 self._last_ts = now
             return self._baseline_mean is not None, False, False
 
@@ -73,11 +102,14 @@ class ROITriggerDetector:
         self._last_ts = now
         dist = self._distance(mean)
         thr = max(cfg.TRIGGER_DIST_THRESHOLD, cfg.NOISE_SIGMA_MULT * self._baseline_noise)
+        self.last_dist, self.last_thr = dist, thr
 
         # Adaptive baseline: follow slow lighting drift, only while clearly quiet
         if dist < thr and self._active_since is None and cfg.BASELINE_ADAPT_SECONDS > 0 and dt > 0:
             a = min(1.0, dt / cfg.BASELINE_ADAPT_SECONDS)
             self._baseline_mean = (self._baseline_mean + a * (mean - self._baseline_mean)).astype(np.float32)
+            if patch is not None and self.reference is not None and patch.shape == self.reference.shape:
+                self.reference += a * (patch - self.reference)
 
         enabled = allow_trigger and now >= self._cooldown_until and now >= self._disabled_until
         if not enabled:

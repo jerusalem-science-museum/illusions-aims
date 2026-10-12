@@ -12,7 +12,7 @@ PREVIEW_W = 1920              # Output frame size sent to ffplay (ffplay then sc
 PREVIEW_H = 1080
 PREVIEW_FPS = 25
 CAMERA_RESOLUTION = (640, 480)
-CAM_INDEX = 0                 # Hardware camera index (0 is usually the USB webcam)
+CAM_INDEX = 2                 # Hardware camera index (0 is usually the USB webcam)
 # Lock auto exposure / white balance / focus so scene changes don't shift the ROI color.
 CAM_LOCK_AUTO = False
 CAM_EXPOSURE = None           # Manual exposure (V4L2 units, see `v4l2-ctl -L`); None = freeze the value auto picked
@@ -90,6 +90,16 @@ COOLDOWN_SECONDS = 2.0        # No new trigger for this long after a trigger
 ROI_DISABLE_AFTER_CAPTURE_S = 1.0  # No new trigger for this long after a capture finishes
 
 DRAW_ROI_RECT = True  # Draw the ROI box (green = ready, red = not ready)
+
+# ---------------------------------------------------------
+# DEBUG / OFFLINE (main.py --debug / --offline)
+# ---------------------------------------------------------
+# --offline: no Google services; captures are saved to OFFLINE_CAPTURE_DIR and the QR encodes the file path.
+OFFLINE_CAPTURE_DIR = os.path.join(LOG_FOLDER, "captures")
+# --debug: ROI stats panel, logs/roi_stats_*.csv and logs/roi_triggers/*.png
+DEBUG_HIST_BINS = 32
+DEBUG_PIXEL_DIFF = 30.0   # A pixel counts as "changed" when its largest channel difference exceeds this
+DEBUG_CSV_HZ = 2.0        # Rows per second written to the stats CSV
 
 # ---------------------------------------------------------
 # QR MOVING QUEUE (big slot + 3-cell "archive" box in the template)

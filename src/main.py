@@ -6,6 +6,7 @@ and its QR code appears in the template's QR slots.
 Per frame, all work happens at camera resolution until a single resize into the template
 window, and the output is one reused buffer written to ffplay without copies.
 """
+import argparse
 import datetime
 import math
 import signal
@@ -22,7 +23,8 @@ import constant as cfg
 from log import get_logger
 from qr_queue import QRQueue
 from render import Template, draw_countdown, draw_roi, flash, flip, make_qr
-from roi_detector import ROITriggerDetector, roi_mean, roi_rect
+from roi_debug import ROIDebug
+from roi_detector import ROITriggerDetector, roi_mean, roi_patch, roi_rect
 from google_upload import DriveUploader, SheetsLogger, resolve_spreadsheet_id
 
 log = get_logger()
@@ -106,9 +108,9 @@ class Camera:
 class FFplay:
     """Fullscreen ffplay fed raw BGR frames on stdin."""
 
-    def __init__(self, w: int, h: int, fps: int):
+    def __init__(self, w: int, h: int, fps: int, fullscreen: bool = True):
         self.proc = subprocess.Popen(
-            ["ffplay", "-loglevel", "error", "-nostats", "-fs",
+            ["ffplay", "-loglevel", "error", "-nostats", *(["-fs"] if fullscreen else []),
              "-fflags", "nobuffer", "-flags", "low_delay", "-framedrop", "-sync", "ext",
              "-f", "rawvideo", "-pixel_format", "bgr24", "-video_size", f"{w}x{h}",
              "-framerate", str(fps), "-i", "-"],
@@ -140,13 +142,16 @@ class FFplay:
 class Exhibit:
     """Rendering and the trigger → countdown → flash → capture sequence (no camera or display I/O)."""
 
-    def __init__(self, drive: Optional[DriveUploader], sheets: Optional[SheetsLogger]):
+    def __init__(self, drive: Optional[DriveUploader], sheets: Optional[SheetsLogger],
+                 offline: bool = False, debug: bool = False):
         self.drive = drive
         self.sheets = sheets
+        self.offline = offline  # save captures locally instead of uploading
         self.template = Template(cfg.MOCKUP_PNG, cfg.PREVIEW_W, cfg.PREVIEW_H)
         self.screen = self.template.bgr.copy()  # output buffer, reused every frame
         self.qr_queue = QRQueue(cfg.PREVIEW_W, cfg.PREVIEW_H)
         self.detector = ROITriggerDetector()
+        self.debug = ROIDebug(self.detector) if debug else None
         self.qr_dir = Path(cfg.LOG_FOLDER) / "qr_codes"
         self.qr_dir.mkdir(parents=True, exist_ok=True)
 
@@ -166,9 +171,17 @@ class Exhibit:
         view = flip(frame) if cfg.FLIP_PREVIEW else frame
         rect = roi_rect(view.shape[1], view.shape[0])
         idle = self.countdown_end is None and not self.capturing
-        ready, enabled, trigger = self.detector.update(roi_mean(view, rect), now, allow_trigger=idle)
+        patch = roi_patch(view, rect)
+        ready, enabled, trigger = self.detector.update(
+            roi_mean(view, rect), now, allow_trigger=idle, patch=patch if self.debug else None)
+        if self.debug:
+            state = ("baseline" if not ready else "TRIGGER" if trigger else "armed" if enabled
+                     else "busy" if not idle else "cooldown")
+            self.debug.update(patch, now, state)
         if trigger:
             log.info("ROI triggered; countdown started.")
+            if self.debug:
+                self.debug.on_trigger()
             self.countdown_end = now + max(1, int(cfg.COUNTDOWN_SECONDS))
 
         video, mapping = self.template.fit(view)
@@ -178,6 +191,8 @@ class Exhibit:
             draw_countdown(video, math.ceil(self.countdown_end - now))
         elif flash_end is not None:
             flash(video)
+        if self.debug:
+            self.debug.draw(video)
         self.template.blend(self.screen, video)
 
         # Restore the template under the QR area, then draw the queue (it may have moved/cleared)
@@ -193,7 +208,7 @@ class Exhibit:
 
     def _capture(self, frame: np.ndarray):
         try:
-            if self.drive is None:
+            if self.drive is None and not self.offline:
                 log.error("Capture requested but Google Drive is not available.")
                 return
             if cfg.FLIP_CAPTURE:
@@ -203,13 +218,20 @@ class Exhibit:
                 log.error("JPEG encoding failed.")
                 return
             name = datetime.datetime.now().strftime("capture_%Y_%m_%d__%H_%M_%S__%f.jpg")
-            try:
-                url = self.drive.upload_jpeg(jpg.tobytes(), name)
-            except Exception:
-                log.exception("Drive upload failed.")
-                self._sheet("UPLOAD_ERROR", note="exception")
-                return
-            log.info("UPLOAD OK: %s", url)
+            if self.offline:
+                path = Path(cfg.OFFLINE_CAPTURE_DIR) / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(jpg.tobytes())
+                url = path.as_uri()
+                log.info("SAVED (offline): %s", path)
+            else:
+                try:
+                    url = self.drive.upload_jpeg(jpg.tobytes(), name)
+                except Exception:
+                    log.exception("Drive upload failed.")
+                    self._sheet("UPLOAD_ERROR", note="exception")
+                    return
+                log.info("UPLOAD OK: %s", url)
             self._sheet("UPLOAD_OK", name, url)
 
             try:
@@ -253,11 +275,25 @@ def init_google():
     return drive, sheets
 
 
+def parse_args():
+    p = argparse.ArgumentParser(description="Ames room exhibit")
+    p.add_argument("--offline", action="store_true",
+                   help="don't use Google: save captures to logs/captures/ and make the QR from the file path")
+    p.add_argument("--debug", action="store_true",
+                   help="ROI stats panel, logs/roi_stats_*.csv and logs/roi_triggers/*.png")
+    p.add_argument("--windowed", action="store_true", help="don't run ffplay fullscreen")
+    p.add_argument("--cam", type=int, default=cfg.CAM_INDEX, help=f"camera index (default {cfg.CAM_INDEX})")
+    return p.parse_args()
+
+
 def main():
-    log.info("Starting. Press q or Esc in the ffplay window to quit, or Ctrl+C here.")
-    exhibit = Exhibit(*init_google())
-    camera = Camera(cfg.CAM_INDEX)
-    viewer = FFplay(cfg.PREVIEW_W, cfg.PREVIEW_H, cfg.PREVIEW_FPS)
+    args = parse_args()
+    log.info("Starting%s%s. Press q or Esc in the ffplay window to quit, or Ctrl+C here.",
+             " OFFLINE" if args.offline else "", " with ROI debug" if args.debug else "")
+    google = (None, None) if args.offline else init_google()
+    exhibit = Exhibit(*google, offline=args.offline, debug=args.debug)
+    camera = Camera(args.cam)
+    viewer = FFplay(cfg.PREVIEW_W, cfg.PREVIEW_H, cfg.PREVIEW_FPS, fullscreen=not args.windowed)
 
     running = True
 
@@ -289,6 +325,8 @@ def main():
     finally:
         camera.release()
         viewer.close()
+        if exhibit.debug:
+            exhibit.debug.close()
 
 
 if __name__ == "__main__":
