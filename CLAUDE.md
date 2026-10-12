@@ -30,37 +30,36 @@ python3 main.py
 
 `run_s.sh` is an alternative apt-based dependency installer and check. Its comments are in French.
 
-Runtime requirements: `ffplay` (from ffmpeg) must be on PATH, and the camera must be at `CAM_INDEX`. Python deps are in `requirements.txt` (the root and `src/` copies differ slightly; `setup.sh` installs from the one next to it). The app exits when the ffplay window is closed (q or Esc) or on SIGINT/SIGTERM.
+Runtime requirements: the camera must be at `CAM_INDEX`, and for usable speed on the Pi, a GPU-capable SDL2 renderer (the `vc4-kms-v3d` driver; the app logs a warning when it falls back to software rendering). Python deps are in `requirements.txt` (the root and `src/` copies differ slightly; `setup.sh` installs from the one next to it). The app exits on q or Esc, when the window is closed, or on SIGINT/SIGTERM.
 
-To check rendering speed or output without the camera or ffplay, call `Exhibit(None, None).render(frame, t)` with a synthetic 640×480 BGR frame.
+To check rendering speed or output without the camera, call `Exhibit(None, None).render(frame, t)` with a synthetic 640×480 BGR frame. To see the composited screen without a display, run `Display` with `SDL_VIDEODRIVER=dummy` and save `display.renderer.to_surface()`.
 
 ## Architecture
 
-**Display is ffplay.** `main.py` renders every frame into one reused 1920×1080 buffer and writes it, without copying, to an `ffplay` subprocess's stdin (`-pixel_format bgr24`). Everything on screen (ROI box, countdown, flash, template, QRs) is drawn into that buffer.
+**The display composites on the GPU** (`display.py`, pygame's SDL2 renderer). Each frame, only the camera image (camera resolution, BGRA) is uploaded. The GPU crops and scales it into the template window, draws the template over it with its alpha, then the QR textures, and scales the 1920×1080 canvas to the screen. The template and each QR are uploaded once. The ROI box, countdown, flash and debug panel are drawn by OpenCV on the camera-resolution image before upload. This replaced an ffplay pipe, which used over a core of the Pi 3B on software scaling.
 
-**Images are BGR everywhere** (OpenCV's native order): camera frames, the template, the ffplay input and the saved JPEG. There are no color conversions anywhere, and it should stay that way. Draw colors are `(B, G, R)`.
+**Images are BGR everywhere** (OpenCV's native order): camera frames, the template, the GPU uploads and the saved JPEG. The only conversion is BGR→BGRA (adding alpha) for uploads; BGRA bytes are SDL's ARGB8888, so SDL copies them without converting. Keep it that way. Draw colors are `(B, G, R)`.
 
 **Modules:**
 - `main.py`:
   - `Camera` keeps only the latest frame, using a background thread.
-  - `FFplay` is the display.
-  - `Exhibit` holds the rendering and the trigger → countdown → flash → capture sequence. It does no I/O.
+  - `Exhibit` holds the trigger → countdown → flash → capture sequence. `render()` returns the BGRA camera image with overlays, its crop for the window, and the debug panel. It does no I/O.
+- `display.py`: `Display` owns the window and the GPU textures, draws one frame per `show()`, and handles q/Esc.
   - `main()` is the loop, paced to `PREVIEW_FPS`.
-- `render.py`: `Template` loads `MOCKUP_PNG` once, premultiplied, at the screen size. The picture window is the bounding box of its transparent area.
-  - `fit()` center-crops the camera frame to the window's aspect ratio without stretching, then resizes it once.
-  - `blend()` puts the result under the template.
-  - `photo()` renders the same thing and crops it to the gold frame, so the live preview matches the uploaded photo.
+- `render.py`: `Template` loads `MOCKUP_PNG` once at the canvas size, both straight (`bgra`, for the GPU) and premultiplied (for the photo). The picture window is the bounding box of its transparent area.
+  - `crop()` is the center crop of the camera frame with the window's aspect ratio (no stretching), shared by the live view and the photo, so the preview matches the uploaded photo.
+  - `photo()` renders the capture on the CPU (`fit()` resizes the crop, `blend()` puts it under the template) and crops it to the gold frame.
   - The file also has the countdown, flash, ROI box and QR helpers.
 - `roi_detector.py`: computes the ROI rectangle and patch (in camera pixels, on the mirrored image) and contains `ROITriggerDetector`.
   - Baseline: a reference ROI patch and per-pixel noise, averaged over `BASELINE_SECONDS`.
   - Trigger: the fraction of changed pixels reaches `CHANGED_FRAC_THRESHOLD`, or the gray NCC with the reference drops below `NCC_THRESHOLD` (only when the reference is textured), for `HOLD_SECONDS`.
   - Also handles the adaptive baseline, the grace period, the cooldown and the disable window after a capture.
-- `qr_queue.py`: the newest QR goes in the big slot and older ones slide through the 3 archive cells (`QR_SLOT_*`). The queue clears after `QR_QUEUE_RESET_S`. Before the queue draws each frame, the screen restores the template under `QRQueue.bbox`.
+- `qr_queue.py`: the newest QR goes in the big slot and older ones slide through the 3 archive cells (`QR_SLOT_*`). The queue clears after `QR_QUEUE_RESET_S`. Each QR is resized once on push (in the capture thread); `placements()` gives the display each QR's animated position and size.
 - `google_upload.py`:
   - `DriveUploader` uploads JPEG bytes from memory over one shared, locked httplib2 connection, with a 30 s timeout and a 45 s keepalive. The "anyone with the link" permission is set asynchronously.
   - `SheetsLogger` appends rows from its own worker thread.
 
-**Per-frame work stays at camera resolution** (flip, ROI, crop) until the single resize into the window. Only the window and the QR area of the output buffer are rewritten each frame. Keep it that way: per-frame numpy work at full HD is what made the Pi slow.
+**Per-frame CPU work stays at camera resolution** (flip, ROI, overlays). All scaling and compositing is on the GPU. Keep it that way: per-frame numpy work at screen size, and ffplay's software scaling, are what made the Pi slow.
 
 **Capture:** when the flash ends, `_capture` runs on a thread with that frame. It flips the frame, renders `Template.photo`, encodes the JPEG and uploads it, pushes the QR, saves the QR PNG to `src/logs/qr_codes/` and logs to Sheets. Its `finally` block disables the ROI for `ROI_DISABLE_AFTER_CAPTURE_S`.
 

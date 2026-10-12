@@ -33,6 +33,8 @@ class Template:
         if rgba is None or rgba.ndim != 3 or rgba.shape[2] != 4:
             log.error("Template %s missing or without alpha; showing the plain camera image.", path)
             rgba = np.zeros((h, w, 4), np.uint8)  # fully transparent: the window is the whole screen
+        # Straight (not premultiplied) BGRA at the screen size, for the GPU display
+        self.bgra = rgba if rgba.shape[:2] == (h, w) else cv2.resize(rgba, (w, h), interpolation=cv2.INTER_AREA)
         b, g, r, a = cv2.split(rgba)
         pre = cv2.merge([cv2.multiply(c, a, scale=1 / 255) for c in (b, g, r)] + [a])
         if pre.shape[:2] != (h, w):
@@ -71,18 +73,22 @@ class Template:
         return (int(x * w / sw), int(y * h / sh),
                 min(w, int(np.ceil((x + bw) * w / sw))), min(h, int(np.ceil((y + bh) * h / sh))))
 
+    def crop(self, fw: int, fh: int) -> Tuple[int, int, int, int]:
+        """(x, y, w, h): the center crop of a fw x fh frame with the window's aspect."""
+        bw, bh = self.win_size
+        if fw * bh > fh * bw:  # frame is wider than the window
+            cw, ch = fh * bw // bh, fh
+        else:
+            cw, ch = fw, fw * bh // bw
+        return (fw - cw) // 2, (fh - ch) // 2, cw, ch
+
     def fit(self, frame: np.ndarray):
         """
         Center-crop frame to the window's aspect and resize it to the window size.
         Returns (video, (crop_x, crop_y, scale)) so camera coordinates can be mapped onto video.
         """
         bw, bh = self.win_size
-        fh, fw = frame.shape[:2]
-        if fw * bh > fh * bw:  # frame is wider than the window
-            cw, ch = fh * bw // bh, fh
-        else:
-            cw, ch = fw, fw * bh // bw
-        cx, cy = (fw - cw) // 2, (fh - ch) // 2
+        cx, cy, cw, ch = self.crop(frame.shape[1], frame.shape[0])
         interp = cv2.INTER_LINEAR if bw >= cw else cv2.INTER_AREA
         video = cv2.resize(frame[cy:cy + ch, cx:cx + cw], (bw, bh), interpolation=interp)
         return video, (cx, cy, bw / cw)

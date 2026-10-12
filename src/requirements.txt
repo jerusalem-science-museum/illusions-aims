@@ -4,3 +4,4 @@ pyshorteners
 google-api-python-client
 pillow
 qrcode[pil]
+pygame>=2.1.3

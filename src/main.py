@@ -1,17 +1,15 @@
 """
-Ames room exhibit: live camera inside a branded template, shown fullscreen through ffplay.
+Ames room exhibit: live camera inside a branded template, shown fullscreen on the GPU.
 Covering the ROI starts a countdown and flash, then the photo is uploaded to Google Drive
 and its QR code appears in the template's QR slots.
 
-Per frame, all work happens at camera resolution until a single resize into the template
-window, and the output is one reused buffer written to ffplay without copies.
+Per frame, the CPU only works at camera resolution (flip, ROI, overlays). The GPU scales the
+camera image into the template's window and composites the template and QRs (see display.py).
 """
 import argparse
 import datetime
 import math
-import os
 import signal
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -22,6 +20,7 @@ import numpy as np
 
 import constant as cfg
 from log import get_logger
+from display import Display
 from qr_queue import QRQueue
 from render import Template, draw_countdown, draw_roi, flash, flip, make_qr
 from roi_debug import ROIDebug
@@ -112,43 +111,6 @@ class Camera:
         self.cap.release()
 
 
-class FFplay:
-    """Fullscreen ffplay fed raw BGR frames on stdin."""
-
-    def __init__(self, w: int, h: int, fps: int, fullscreen: bool = True):
-        self.proc = subprocess.Popen(
-            ["ffplay", "-loglevel", "error", "-nostats", *(["-fs"] if fullscreen else []),
-             "-fflags", "nobuffer", "-flags", "low_delay", "-framedrop", "-sync", "ext",
-             "-f", "rawvideo", "-pixel_format", "bgr24", "-video_size", f"{w}x{h}",
-             "-framerate", str(fps), "-i", "-"],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, bufsize=0,
-            # SDL's software renderer scales every frame to fullscreen on the CPU (over a core on a Pi 3B);
-            # GLES2 does it on the GPU. Set SDL_RENDER_DRIVER in the environment to override.
-            env={**os.environ, "SDL_RENDER_DRIVER": os.environ.get("SDL_RENDER_DRIVER", "opengles2")},
-        )
-        log.info("ffplay started.")
-
-    def write(self, frame: np.ndarray) -> bool:
-        """Write one frame; False once ffplay is gone (window closed with q/Esc)."""
-        if self.proc.poll() is not None:
-            return False
-        view = memoryview(frame).cast("B")
-        try:
-            while view:  # an unbuffered pipe write may be partial
-                view = view[self.proc.stdin.write(view):]
-            return True
-        except (BrokenPipeError, OSError):
-            return False
-
-    def close(self):
-        try:
-            self.proc.stdin.close()
-            self.proc.terminate()
-            self.proc.wait(timeout=2)
-        except Exception:
-            self.proc.kill()
-
-
 class Exhibit:
     """Rendering and the trigger → countdown → flash → capture sequence (no camera or display I/O)."""
 
@@ -161,19 +123,22 @@ class Exhibit:
         # The uploaded photo has its own resolution, so a smaller preview doesn't shrink it
         self.photo_template = (self.template if (cfg.PHOTO_W, cfg.PHOTO_H) == (cfg.PREVIEW_W, cfg.PREVIEW_H)
                                else Template(cfg.MOCKUP_PNG, cfg.PHOTO_W, cfg.PHOTO_H))
-        self.screen = self.template.bgr.copy()  # output buffer, reused every frame
         self.qr_queue = QRQueue(cfg.PREVIEW_W, cfg.PREVIEW_H)
         self.detector = ROITriggerDetector()
         self.debug = ROIDebug(self.detector) if debug else None
         self.qr_dir = Path(cfg.LOG_FOLDER) / "qr_codes"
         self.qr_dir.mkdir(parents=True, exist_ok=True)
 
-        self.stage_s = [0.0] * 4  # time spent in detect / fit / blend / QR, summed since the last FPS log
+        self.stage_s = [0.0] * 2  # time spent in detect / draw, summed since the last FPS log
         self.countdown_end: Optional[float] = None  # set while counting down / flashing
         self.capturing = False                      # set while the capture thread runs
 
-    def render(self, frame: np.ndarray, now: float) -> np.ndarray:
-        """Advance the sequence and draw one screen frame from a raw camera frame."""
+    def render(self, frame: np.ndarray, now: float):
+        """
+        Advance the sequence and prepare one screen frame from a raw camera frame.
+        Returns (video, crop, panel): the BGRA camera image with the overlays drawn on it, the
+        (x, y, w, h) part of it that fills the template window, and the --debug panel (or None).
+        """
         flash_end = None
         if self.countdown_end is not None:
             flash_end = self.countdown_end + cfg.FLASH_DURATION_S
@@ -199,27 +164,25 @@ class Exhibit:
             self.countdown_end = now + max(1, int(cfg.COUNTDOWN_SECONDS))
 
         t1 = time.perf_counter()
-        video, mapping = self.template.fit(view)
+        img = cv2.cvtColor(view, cv2.COLOR_BGR2BGRA)  # a new array, so the camera frame stays untouched
+        crop = self.template.crop(img.shape[1], img.shape[0])
+        cx, cy, cw, ch = crop
+        video = img[cy:cy + ch, cx:cx + cw]  # a view: drawing on it draws on img
         if cfg.DRAW_ROI_RECT:
-            draw_roi(video, rect, mapping, active=ready and enabled)
+            draw_roi(video, rect, (cx, cy, 1.0), active=ready and enabled)
         if self.countdown_end is not None and now < self.countdown_end:
             draw_countdown(video, math.ceil(self.countdown_end - now))
         elif flash_end is not None:
             flash(video)
+        panel = None
         if self.debug:
-            self.debug.draw(video)
+            panel = np.zeros((290, 440, 3), np.uint8)
+            self.debug.draw(panel)
+            panel = cv2.cvtColor(panel, cv2.COLOR_BGR2BGRA)
         t2 = time.perf_counter()
-        self.template.blend(self.screen, video)
-        t3 = time.perf_counter()
-
-        # Restore the template under the QR area, then draw the queue (it may have moved/cleared)
-        x0, y0, x1, y1 = self.qr_queue.bbox
-        self.screen[y0:y1, x0:x1] = self.template.bgr[y0:y1, x0:x1]
-        self.qr_queue.render(self.screen)
-        t4 = time.perf_counter()
-        for i, d in enumerate((t1 - t0, t2 - t1, t3 - t2, t4 - t3)):
-            self.stage_s[i] += d
-        return self.screen
+        self.stage_s[0] += t1 - t0
+        self.stage_s[1] += t2 - t1
+        return img, crop, panel
 
     def _sheet(self, event: str, name: str = "", url: str = "", note: str = ""):
         if self.sheets is not None:
@@ -271,7 +234,7 @@ class Exhibit:
 
 
 class FPSLog:
-    """Logs the output and camera frame rates, the average render and ffplay write times, and the CPU temperature."""
+    """Logs the output and camera frame rates, the average render and display times, and the CPU temperature."""
 
     def __init__(self, period: float):
         self.period = period
@@ -281,7 +244,7 @@ class FPSLog:
         self.start, self.cam0 = now, cam_frames
         self.n, self.render_s, self.write_s = 0, 0.0, 0.0
 
-    def tick(self, render_s: float, write_s: float, cam_frames: int, stage_s=(0, 0, 0, 0)) -> None:
+    def tick(self, render_s: float, write_s: float, cam_frames: int, stage_s=(0, 0)) -> None:
         self.n += 1
         self.render_s += render_s
         self.write_s += write_s
@@ -289,7 +252,7 @@ class FPSLog:
         if self.period <= 0 or now - self.start < self.period:
             return
         span = now - self.start
-        log.info("FPS out %.1f (target %d), camera %.1f | render %.1f ms (detect %.1f, fit %.1f, blend %.1f, qr %.1f), write %.1f ms%s",
+        log.info("FPS out %.1f (target %d), camera %.1f | render %.1f ms (detect %.1f, draw %.1f), display %.1f ms%s",
                  self.n / span, cfg.PREVIEW_FPS, (cam_frames - self.cam0) / span,
                  1000 * self.render_s / self.n, *(1000 * s / self.n for s in stage_s),
                  1000 * self.write_s / self.n, _cpu_temp())
@@ -336,22 +299,22 @@ def parse_args():
                    help="don't use Google: save captures to logs/captures/ and make the QR from the file path")
     p.add_argument("--debug", action="store_true",
                    help="ROI stats panel, logs/roi_stats_*.csv and logs/roi_triggers/*.png")
-    p.add_argument("--windowed", action="store_true", help="don't run ffplay fullscreen")
+    p.add_argument("--windowed", action="store_true", help="show in a window instead of fullscreen")
     p.add_argument("--cam", type=int, default=cfg.CAM_INDEX, help=f"camera index (default {cfg.CAM_INDEX})")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    # cv2.resize splits work across OpenCV's thread pool and waits for every worker. With ffplay and the
-    # camera decode keeping the Pi's 4 cores busy, a worker is often descheduled and the whole resize stalls.
+    # OpenCV splits some calls across its thread pool and waits for every worker. With the camera decode
+    # keeping the Pi's 4 cores busy, a worker is often descheduled and the whole call stalls.
     cv2.setNumThreads(1)
-    log.info("Starting%s%s. Press q or Esc in the ffplay window to quit, or Ctrl+C here.",
+    log.info("Starting%s%s. Press q or Esc to quit, or Ctrl+C here.",
              " OFFLINE" if args.offline else "", " with ROI debug" if args.debug else "")
     google = (None, None) if args.offline else init_google()
     exhibit = Exhibit(*google, offline=args.offline, debug=args.debug)
     camera = Camera(args.cam)
-    viewer = FFplay(cfg.PREVIEW_W, cfg.PREVIEW_H, cfg.PREVIEW_FPS, fullscreen=not args.windowed)
+    viewer = Display(exhibit.template, fullscreen=not args.windowed)
 
     running = True
 
@@ -373,10 +336,10 @@ def main():
                 time.sleep(0.01)
                 continue
             t0 = time.monotonic()
-            out = exhibit.render(frame, t0)
+            video, crop, panel = exhibit.render(frame, t0)
             t1 = time.monotonic()
-            if not viewer.write(out):
-                log.info("ffplay closed. Exiting.")
+            if not viewer.show(video, crop, exhibit.qr_queue.placements(), panel):
+                log.info("Window closed. Exiting.")
                 break
             fps.tick(t1 - t0, time.monotonic() - t1, camera.frames, exhibit.stage_s)
             next_t += interval
