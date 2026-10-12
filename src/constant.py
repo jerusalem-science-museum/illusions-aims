@@ -15,6 +15,7 @@ PHOTO_H = 1080
 PREVIEW_FPS = 25
 CAMERA_RESOLUTION = (640, 480)
 CAM_INDEX = 0                 # Hardware camera index (0 is usually the USB webcam)
+CAM_BUFFERS = 4               # V4L2 capture buffers; 1 halves the frame rate on a Pi (see Camera)
 # Lock auto exposure / white balance / focus so scene changes don't shift the ROI color.
 CAM_LOCK_AUTO = False
 CAM_EXPOSURE = None           # Manual exposure (V4L2 units, see `v4l2-ctl -L`); None = freeze the value auto picked

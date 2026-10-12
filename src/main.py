@@ -41,11 +41,14 @@ class Camera:
         if not self.cap.isOpened():
             raise RuntimeError(f"Cannot open the camera on index {index}.")
 
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # The reader thread drains the queue as fast as frames arrive, so extra buffers add no latency.
+        # With only 1, the driver has nowhere to put the next frame while the previous one is being
+        # decoded, and on a Pi that drops every other frame (30 -> 15 fps).
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, cfg.CAM_BUFFERS)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FPS, cfg.PREVIEW_FPS)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.CAMERA_RESOLUTION[0])
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.CAMERA_RESOLUTION[1])
+        self.cap.set(cv2.CAP_PROP_FPS, cfg.PREVIEW_FPS)  # last: V4L2 resets the frame rate when the size changes
         fourcc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
         log.info("Camera opened: %dx%d @ %s fps, format %s",
                  self.cap.get(cv2.CAP_PROP_FRAME_WIDTH), self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
