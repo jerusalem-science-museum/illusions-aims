@@ -46,9 +46,10 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_FPS, cfg.PREVIEW_FPS)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.CAMERA_RESOLUTION[0])
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.CAMERA_RESOLUTION[1])
-        log.info("Camera opened: %dx%d @ %s fps",
+        fourcc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
+        log.info("Camera opened: %dx%d @ %s fps, format %s",
                  self.cap.get(cv2.CAP_PROP_FRAME_WIDTH), self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
-                 self.cap.get(cv2.CAP_PROP_FPS))
+                 self.cap.get(cv2.CAP_PROP_FPS), fourcc.to_bytes(4, "little").decode("ascii", "replace"))
         if cfg.CAM_LOCK_AUTO:
             self._lock_auto()
 
@@ -150,6 +151,9 @@ class Exhibit:
         self.sheets = sheets
         self.offline = offline  # save captures locally instead of uploading
         self.template = Template(cfg.MOCKUP_PNG, cfg.PREVIEW_W, cfg.PREVIEW_H)
+        # The uploaded photo has its own resolution, so a smaller preview doesn't shrink it
+        self.photo_template = (self.template if (cfg.PHOTO_W, cfg.PHOTO_H) == (cfg.PREVIEW_W, cfg.PREVIEW_H)
+                               else Template(cfg.MOCKUP_PNG, cfg.PHOTO_W, cfg.PHOTO_H))
         self.screen = self.template.bgr.copy()  # output buffer, reused every frame
         self.qr_queue = QRQueue(cfg.PREVIEW_W, cfg.PREVIEW_H)
         self.detector = ROITriggerDetector()
@@ -215,7 +219,7 @@ class Exhibit:
                 return
             if cfg.FLIP_CAPTURE:
                 frame = flip(frame)
-            ok, jpg = cv2.imencode(".jpg", self.template.photo(frame))
+            ok, jpg = cv2.imencode(".jpg", self.photo_template.photo(frame))
             if not ok:
                 log.error("JPEG encoding failed.")
                 return

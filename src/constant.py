@@ -8,11 +8,13 @@ import os
 # ---------------------------------------------------------
 # SCREEN / CAMERA
 # ---------------------------------------------------------
-PREVIEW_W = 1920              # Output frame size sent to ffplay (ffplay then scales it fullscreen)
-PREVIEW_H = 1080
+PREVIEW_W = 1280              # Output frame size sent to ffplay (ffplay then scales it fullscreen).
+PREVIEW_H = 720               # 1280x720 is ~2.25x less work than 1920x1080 per frame (matters on a Pi 3B)
+PHOTO_W = 1920                # Size the template is rendered at for the uploaded photo (before cropping to the frame)
+PHOTO_H = 1080
 PREVIEW_FPS = 25
 CAMERA_RESOLUTION = (640, 480)
-CAM_INDEX = 2                 # Hardware camera index (0 is usually the USB webcam)
+CAM_INDEX = 0                 # Hardware camera index (0 is usually the USB webcam)
 # Lock auto exposure / white balance / focus so scene changes don't shift the ROI color.
 CAM_LOCK_AUTO = False
 CAM_EXPOSURE = None           # Manual exposure (V4L2 units, see `v4l2-ctl -L`); None = freeze the value auto picked
