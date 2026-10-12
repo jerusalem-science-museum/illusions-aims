@@ -51,9 +51,9 @@ To check rendering speed or output without the camera or ffplay, call `Exhibit(N
   - `blend()` puts the result under the template.
   - `photo()` renders the same thing and crops it to the gold frame, so the live preview matches the uploaded photo.
   - The file also has the countdown, flash, ROI box and QR helpers.
-- `roi_detector.py`: computes the ROI rectangle and mean color (in camera pixels, on the mirrored image) and contains `ROITriggerDetector`.
-  - Baseline: averaged over `BASELINE_SECONDS`.
-  - Trigger: the RGB distance stays above `max(TRIGGER_DIST_THRESHOLD, NOISE_SIGMA_MULT × noise)` for `HOLD_SECONDS`.
+- `roi_detector.py`: computes the ROI rectangle and patch (in camera pixels, on the mirrored image) and contains `ROITriggerDetector`.
+  - Baseline: a reference ROI patch and per-pixel noise, averaged over `BASELINE_SECONDS`.
+  - Trigger: the fraction of changed pixels reaches `CHANGED_FRAC_THRESHOLD`, or the gray NCC with the reference drops below `NCC_THRESHOLD` (only when the reference is textured), for `HOLD_SECONDS`.
   - Also handles the adaptive baseline, the grace period, the cooldown and the disable window after a capture.
 - `qr_queue.py`: the newest QR goes in the big slot and older ones slide through the 3 archive cells (`QR_SLOT_*`). The queue clears after `QR_QUEUE_RESET_S`. Before the queue draws each frame, the screen restores the template under `QRQueue.bbox`.
 - `google_upload.py`:

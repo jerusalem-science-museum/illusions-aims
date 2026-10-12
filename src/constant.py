@@ -83,12 +83,16 @@ ROI_H = 40
 ROI_X = 480
 ROI_Y = 80
 
-BASELINE_SECONDS = 2.0        # Time to average the empty-ROI color at startup
-TRIGGER_DIST_THRESHOLD = 20.0 # Min RGB distance from baseline to count as a change. Lower = more sensitive.
-NOISE_SIGMA_MULT = 6.0        # Effective threshold = max(TRIGGER_DIST_THRESHOLD, this * measured baseline noise)
+BASELINE_SECONDS = 2.0        # Time to record the empty-ROI reference patch (and per-pixel noise) at startup
+PIXEL_DIFF_MIN = 25.0         # A pixel counts as changed when its largest channel difference exceeds
+PIXEL_SIGMA_MULT = 5.0        #   max(PIXEL_DIFF_MIN, PIXEL_SIGMA_MULT * that pixel's measured noise)
+CHANGED_FRAC_THRESHOLD = 0.5  # Covered when at least this fraction of ROI pixels changed. Lower = more sensitive.
+NCC_THRESHOLD = 0.5           # ...or when the gray correlation with the reference drops below this (1 = same)
+NCC_MIN_STD = 8.0             # NCC is only used if the reference's gray std is at least this (flat = no structure)
+ROI_BLUR_KSIZE = 3            # Gaussian blur on the ROI before comparing (odd; 1 disables). Damps noise/jitter.
 BASELINE_ADAPT_SECONDS = 5.0  # Baseline slowly follows lighting drift (time constant); 0 disables
 HOLD_GRACE_SECONDS = 0.2      # Brief dips below threshold don't reset the hold timer
-BRIGHTNESS_COMP = False       # If True, discount uniform gain shifts (can hide shadows/covering)
+BRIGHTNESS_COMP = False       # If True, discount uniform gain shifts in the pixel diff (can hide a flat hand on a flat background)
 HOLD_SECONDS = 0.5            # How long the ROI must stay covered to trigger
 COOLDOWN_SECONDS = 2.0        # No new trigger for this long after a trigger
 ROI_DISABLE_AFTER_CAPTURE_S = 1.0  # No new trigger for this long after a capture finishes
@@ -102,7 +106,6 @@ DRAW_ROI_RECT = True  # Draw the ROI box (green = ready, red = not ready)
 OFFLINE_CAPTURE_DIR = os.path.join(LOG_FOLDER, "captures")
 # --debug: ROI stats panel, logs/roi_stats_*.csv and logs/roi_triggers/*.png
 DEBUG_HIST_BINS = 32
-DEBUG_PIXEL_DIFF = 30.0   # A pixel counts as "changed" when its largest channel difference exceeds this
 DEBUG_CSV_HZ = 2.0        # Rows per second written to the stats CSV
 
 # ---------------------------------------------------------

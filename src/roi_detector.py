@@ -1,6 +1,7 @@
-"""ROI trigger: fires when the ROI's mean color stays far enough from its baseline for long enough."""
+"""ROI trigger: fires when the ROI's pixels stay different enough from a reference patch for long enough."""
 from typing import Optional, Tuple
 
+import cv2
 import numpy as np
 
 import constant as cfg
@@ -18,98 +19,108 @@ def roi_patch(frame: np.ndarray, rect: Tuple[int, int, int, int]) -> np.ndarray:
     return frame[y0:y1, x0:x1]
 
 
-def roi_mean(frame: np.ndarray, rect: Tuple[int, int, int, int]) -> np.ndarray:
-    return roi_patch(frame, rect).reshape(-1, 3).mean(axis=0).astype(np.float32)
+def _ncc(a: np.ndarray, b: np.ndarray) -> float:
+    """Zero-mean normalized cross-correlation of two gray patches (1 = same structure)."""
+    a = a - a.mean()
+    b = b - b.mean()
+    den = float(np.sqrt((a * a).sum() * (b * b).sum()))
+    return float((a * b).sum() / den) if den > 1e-6 else 0.0
 
 
 class ROITriggerDetector:
     """
-    - Collect a baseline mean color for BASELINE_SECONDS (and its noise level)
-    - Distance = Euclidean distance between the current ROI mean and the baseline
-    - Trigger when distance >= threshold for HOLD_SECONDS (short dips are tolerated)
+    - Collect a reference patch for BASELINE_SECONDS, plus each pixel's noise (std over time)
+    - Per frame, two signals against the reference:
+        changed: fraction of pixels whose largest channel difference exceeds
+                 max(PIXEL_DIFF_MIN, PIXEL_SIGMA_MULT * that pixel's noise)
+        ncc:     gray correlation with the reference (ignores gain/offset); only used when the
+                 reference has enough texture (gray std >= NCC_MIN_STD)
+    - score = max(changed / CHANGED_FRAC_THRESHOLD, (1 - ncc) / (1 - NCC_THRESHOLD)); covered when score >= 1
+    - Trigger when covered for HOLD_SECONDS (short dips are tolerated)
     - Then COOLDOWN_SECONDS, plus any disable window set by disable_for()
     """
 
     def __init__(self):
         self._baseline_start: Optional[float] = None
-        self._baseline_samples = []
-        self._baseline_mean: Optional[np.ndarray] = None
-        self._baseline_noise = 0.0   # std-based noise floor (vector norm)
-        # Reference ROI pixels, kept in step with the baseline mean (only when update() gets a patch).
-        # Used by the debug view; the trigger itself only looks at the mean.
-        self.reference: Optional[np.ndarray] = None
-        self._ref_sum: Optional[np.ndarray] = None
-        self._ref_n = 0
-        self.last_dist = 0.0
-        self.last_thr = 0.0
+        self._sum: Optional[np.ndarray] = None
+        self._sum_sq: Optional[np.ndarray] = None
+        self._n = 0
+        self.reference: Optional[np.ndarray] = None   # float32 HxWx3, follows slow drift
+        self._pix_thr: Optional[np.ndarray] = None    # float32 HxW, per-pixel change threshold
+        self._baseline_noise = 0.0                    # mean per-pixel std, for the debug view
+        self.last_dist = 0.0       # score (see class doc)
+        self.last_thr = 1.0
+        self.last_changed = 0.0
+        self.last_ncc: Optional[float] = None  # None when the reference is too flat for NCC
         self._last_ts: Optional[float] = None
         self._below_since: Optional[float] = None
         self._active_since: Optional[float] = None
         self._cooldown_until = 0.0
         self._disabled_until = 0.0
 
-    def _distance(self, cur: np.ndarray) -> float:
-        base = self._baseline_mean
-        diff = cur - base
-        if cfg.BRIGHTNESS_COMP:
-            # Remove the common (gray) shift, keep colour change; then take the larger of
-            # the colour change and a de-weighted brightness change.
-            gray = float(diff.mean())
-            chroma = float(np.linalg.norm(diff - gray))
-            # Gain-style exposure drift scales all channels proportionally
-            gain = float(cur.mean()) / (float(base.mean()) + 1e-6)
-            resid = float(np.linalg.norm(cur - base * gain))
-            return max(min(resid, float(np.linalg.norm(diff))), chroma)
-        return float(np.linalg.norm(diff))
-
     def disable_for(self, seconds: float, now: float) -> None:
         self._disabled_until = max(self._disabled_until, now + seconds)
 
     @property
     def baseline_mean(self) -> Optional[np.ndarray]:
-        return self._baseline_mean
+        return None if self.reference is None else self.reference.reshape(-1, 3).mean(axis=0)
 
     @property
     def baseline_noise(self) -> float:
         return self._baseline_noise
 
-    def update(self, mean: np.ndarray, now: float, allow_trigger: bool,
-               patch: Optional[np.ndarray] = None) -> Tuple[bool, bool, bool]:
-        """Returns (baseline_ready, roi_enabled, should_trigger). should_trigger is True once per trigger.
+    def _score(self, cur: np.ndarray) -> float:
+        ref = self.reference
+        if cfg.BRIGHTNESS_COMP:
+            # Gain-style exposure drift scales all channels proportionally
+            ref = ref * (float(cur.mean()) / (float(ref.mean()) + 1e-6))
+        diff = np.abs(cur - ref).max(axis=2)
+        self.last_changed = float((diff > self._pix_thr).mean())
+        score = self.last_changed / cfg.CHANGED_FRAC_THRESHOLD
 
-        patch (the ROI pixels) is optional; when given, a reference patch is kept for the debug view.
-        """
+        ref_gray = self.reference.mean(axis=2)
+        if ref_gray.std() >= cfg.NCC_MIN_STD:
+            self.last_ncc = _ncc(cur.mean(axis=2), ref_gray)
+            score = max(score, (1.0 - self.last_ncc) / (1.0 - cfg.NCC_THRESHOLD))
+        else:
+            self.last_ncc = None
+        return score
+
+    def update(self, patch: np.ndarray, now: float, allow_trigger: bool) -> Tuple[bool, bool, bool]:
+        """patch: the ROI pixels (uint8 BGR). Returns (baseline_ready, roi_enabled, should_trigger);
+        should_trigger is True once per trigger."""
+        cur = patch.astype(np.float32)
+        if cfg.ROI_BLUR_KSIZE > 1:
+            cur = cv2.GaussianBlur(cur, (cfg.ROI_BLUR_KSIZE, cfg.ROI_BLUR_KSIZE), 0)
+
         # Baseline acquisition
-        if self._baseline_mean is None:
+        if self.reference is None:
             if self._baseline_start is None:
                 self._baseline_start = now
-            self._baseline_samples.append(mean)
-            if patch is not None:
-                self._ref_sum = patch.astype(np.float32) + (0 if self._ref_sum is None else self._ref_sum)
-                self._ref_n += 1
+                self._sum = np.zeros_like(cur)
+                self._sum_sq = np.zeros_like(cur)
+            self._sum += cur
+            self._sum_sq += cur * cur
+            self._n += 1
             if now - self._baseline_start >= cfg.BASELINE_SECONDS:
-                arr = np.stack(self._baseline_samples)
-                self._baseline_mean = arr.mean(axis=0).astype(np.float32)
-                self._baseline_noise = float(np.linalg.norm(arr.std(axis=0)))
-                self._baseline_samples = []
-                if self._ref_n:
-                    self.reference = self._ref_sum / self._ref_n
-                    self._ref_sum, self._ref_n = None, 0
+                mean = self._sum / self._n
+                std = np.sqrt(np.maximum(0.0, self._sum_sq / self._n - mean * mean)).max(axis=2)
+                self.reference = mean
+                self._pix_thr = np.maximum(cfg.PIXEL_DIFF_MIN, cfg.PIXEL_SIGMA_MULT * std).astype(np.float32)
+                self._baseline_noise = float(std.mean())
+                self._sum = self._sum_sq = None
                 self._last_ts = now
-            return self._baseline_mean is not None, False, False
+            return self.reference is not None, False, False
 
         dt = max(0.0, now - self._last_ts)
         self._last_ts = now
-        dist = self._distance(mean)
-        thr = max(cfg.TRIGGER_DIST_THRESHOLD, cfg.NOISE_SIGMA_MULT * self._baseline_noise)
-        self.last_dist, self.last_thr = dist, thr
+        score = self._score(cur)
+        self.last_dist = score
 
         # Adaptive baseline: follow slow lighting drift, only while clearly quiet
-        if dist < thr and self._active_since is None and cfg.BASELINE_ADAPT_SECONDS > 0 and dt > 0:
+        if score < 1.0 and self._active_since is None and cfg.BASELINE_ADAPT_SECONDS > 0 and dt > 0:
             a = min(1.0, dt / cfg.BASELINE_ADAPT_SECONDS)
-            self._baseline_mean = (self._baseline_mean + a * (mean - self._baseline_mean)).astype(np.float32)
-            if patch is not None and self.reference is not None and patch.shape == self.reference.shape:
-                self.reference += a * (patch - self.reference)
+            self.reference += a * (cur - self.reference)
 
         enabled = allow_trigger and now >= self._cooldown_until and now >= self._disabled_until
         if not enabled:
@@ -117,7 +128,7 @@ class ROITriggerDetector:
             self._below_since = None
             return True, False, False
 
-        if dist >= thr:
+        if score >= 1.0:
             self._below_since = None
             if self._active_since is None:
                 self._active_since = now

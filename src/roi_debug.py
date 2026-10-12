@@ -2,15 +2,15 @@
 ROI debug view (main.py --debug): compares the detector's reference ROI with the current ROI.
 
 - An on-screen panel: the reference and current ROI pixels side by side, their per-channel
-  histograms overlaid, and the change metrics (the detector's mean distance plus alternatives).
+  histograms overlaid, and the detector's change metrics.
 - A CSV time series in LOG_FOLDER (roi_stats_<start>.csv) to see lighting drift over a day.
 - On every trigger, a PNG of reference | current | |diff| in LOG_FOLDER/roi_triggers/.
 
 Metrics (all on the ROI only, so they are cheap):
-- dist / thr: what the detector actually uses (RGB distance of the means vs its threshold)
-- bhatt: mean Bhattacharyya distance of the per-channel histograms (0 = same, 1 = disjoint)
-- changed: fraction of pixels whose largest channel difference exceeds DEBUG_PIXEL_DIFF
-- ncc: normalized cross-correlation of the gray patches (1 = same structure; ignores gain/offset)
+- dist / thr: the detector's score vs 1.0 (covered when score >= 1; see ROITriggerDetector)
+- changed: the detector's fraction of changed pixels
+- ncc: the detector's gray correlation with the reference (- when the reference is too flat)
+- bhatt: mean Bhattacharyya distance of the per-channel histograms (0 = same, 1 = disjoint), for comparison
 """
 import csv
 import datetime
@@ -33,16 +33,6 @@ def _hist(patch: np.ndarray) -> np.ndarray:
     bins = cfg.DEBUG_HIST_BINS
     h = np.stack([cv2.calcHist([patch], [c], None, [bins], [0, 256]).ravel() for c in range(3)])
     return (h / max(1.0, h.sum(axis=1, keepdims=True).max())).astype(np.float32)
-
-
-def _ncc(a: np.ndarray, b: np.ndarray) -> float:
-    a = a - a.mean()
-    b = b - b.mean()
-    va, vb = float((a * a).sum()), float((b * b).sum())
-    flat = 1e-3 * a.size  # a flat patch (std < ~0.03) has no structure to correlate
-    if va < flat or vb < flat:
-        return 1.0 if va < flat and vb < flat else 0.0
-    return float((a * b).sum() / np.sqrt(va * vb))
 
 
 class ROIDebug:
@@ -88,9 +78,8 @@ class ROIDebug:
             self._ref_hist = _hist(ref_u8)
             s["bhatt"] = float(np.mean([cv2.compareHist(self._ref_hist[c], self._cur_hist[c],
                                                         cv2.HISTCMP_BHATTACHARYYA) for c in range(3)]))
-            diff = np.abs(patch.astype(np.float32) - ref).max(axis=2)
-            s["changed"] = float((diff > cfg.DEBUG_PIXEL_DIFF).mean())
-            s["ncc"] = _ncc(patch.astype(np.float32).mean(axis=2), ref.mean(axis=2))
+            s["changed"] = det.last_changed
+            s["ncc"] = det.last_ncc
             s["ref_luma"] = float(ref.mean())
         self.stats = s
 
@@ -156,7 +145,7 @@ class ROIDebug:
         lines = [
             (f"state: {s['state']}   fps {self.fps:4.1f} / {cfg.PREVIEW_FPS}",
              (255, 255, 255) if self.fps >= 0.9 * cfg.PREVIEW_FPS else hot),
-            (f"mean dist {s['dist']:6.1f}  thr {s['thr']:5.1f}  noise {s['noise']:4.1f}", hot if above else ok),
+            (f"score {s['dist']:5.2f}  thr {s['thr']:4.2f}  pixel noise {s['noise']:4.1f}", hot if above else ok),
             (f"cur  BGR {_vec(s['cur'])}   luma {s['cur_luma']:5.1f}", (255, 255, 255)),
             (f"base BGR {_vec(s['base'])}   luma {_fmt(s.get('ref_luma'), 5, 1)}", (255, 255, 255)),
             (f"hist bhatt {_fmt(s.get('bhatt'))}   changed px {_pct(s.get('changed'))}"

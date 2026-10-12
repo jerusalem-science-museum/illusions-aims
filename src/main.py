@@ -24,7 +24,7 @@ from log import get_logger
 from qr_queue import QRQueue
 from render import Template, draw_countdown, draw_roi, flash, flip, make_qr
 from roi_debug import ROIDebug
-from roi_detector import ROITriggerDetector, roi_mean, roi_patch, roi_rect
+from roi_detector import ROITriggerDetector, roi_patch, roi_rect
 from google_upload import DriveUploader, SheetsLogger, resolve_spreadsheet_id
 
 log = get_logger()
@@ -181,8 +181,7 @@ class Exhibit:
         rect = roi_rect(view.shape[1], view.shape[0])
         idle = self.countdown_end is None and not self.capturing
         patch = roi_patch(view, rect)
-        ready, enabled, trigger = self.detector.update(
-            roi_mean(view, rect), now, allow_trigger=idle, patch=patch if self.debug else None)
+        ready, enabled, trigger = self.detector.update(patch, now, allow_trigger=idle)
         if self.debug:
             state = ("baseline" if not ready else "TRIGGER" if trigger else "armed" if enabled
                      else "busy" if not idle else "cooldown")
