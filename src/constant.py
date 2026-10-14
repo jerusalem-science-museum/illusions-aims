@@ -36,6 +36,12 @@ PICAM_SATURATION = 1.0        # Infrared washes colors out; >1 brings some back
 # Without an IR filter, a matrix with stronger negative off-diagonals than the tuning file's cancels some of
 # the infrared tint. picam_check.py prints the tuning file's matrix to start from; tune by eye on site.
 PICAM_CCM = None
+# Software IR filter. With no IR-cut filter, infrared makes skin, fabrics and wood come out too red.
+# It pulls red toward the green/blue average in the ISP's color matrix (free per frame, same in the
+# preview and the photo); neutral colors are unchanged, real reds get a bit less saturated.
+# Changing it needs an app restart; the white balance calibration is not affected.
+IR_FILTER = True
+IR_FILTER_STRENGTH = 0.3      # 0 = no change .. 1 = reds become gray. Tune by eye on site (try 0.2-0.5)
 CAM_CALIBRATE_SETTLE_S = 3.0  # --calibrate-camera: let auto exposure settle this long
 
 # --- USB camera (--camera usb) ------------------------------------------------------------------

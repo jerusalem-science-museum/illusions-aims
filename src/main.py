@@ -20,7 +20,7 @@ import numpy as np
 
 import constant as cfg
 from log import get_logger
-from camera import calibrate, open_camera
+from camera import Camera, calibrate, open_camera
 from display import Display
 from qr_queue import QRQueue
 from render import Template, draw_countdown, draw_roi, flash, make_qr
@@ -36,7 +36,7 @@ class Exhibit:
 
     def __init__(self, drive: Optional[DriveUploader], sheets: Optional[SheetsLogger],
                  offline: bool = False, debug: bool = False):
-        self.camera = None  # set once opened; _capture takes the photo from it
+        self.camera: Optional[Camera] = None  # set once opened; _capture takes the photo from it
         self.drive = drive
         self.sheets = sheets
         self.offline = offline  # save captures locally instead of uploading
@@ -132,6 +132,7 @@ class Exhibit:
                 url = path.as_uri()
                 log.info("SAVED (offline): %s", path)
             else:
+                assert self.drive is not None  # checked at the top
                 try:
                     url = self.drive.upload_jpeg(jpg.tobytes(), name)
                 except Exception:

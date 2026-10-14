@@ -19,7 +19,7 @@ turn off the two adaptive stages that remain when AE/AWB are off (see _tuning())
 """
 import threading
 import time
-from typing import Optional
+from typing import Optional, Union
 
 import cv2
 import numpy as np
@@ -68,6 +68,7 @@ def _tuning() -> dict:
       rpi.alsc n_iter=0         adaptive lens-shading correction slowly drifts the colors per region;
                                 0 keeps only the calibrated tables
       rpi.ccm (PICAM_CCM)       a fixed color matrix, for a camera without an IR-cut filter
+      rpi.ccm (IR_FILTER)       the IR correction (ir_matrix) in front of every color matrix
     """
     from picamera2 import Picamera2
 
@@ -88,7 +89,36 @@ def _tuning() -> dict:
         else:
             # The ISP interpolates between matrices by color temperature; the same one at both ends is fixed
             ccm["ccms"] = [{"ct": 2000, "ccm": m}, {"ct": 10000, "ccm": m}]
+    if cfg.IR_FILTER:
+        ccm = _algo(tuning, "rpi.ccm")
+        if ccm is None:
+            log.warning("Tuning file %s has no rpi.ccm; IR_FILTER ignored.", cfg.PICAM_TUNING_FILE)
+        else:
+            ir = ir_matrix(cfg.IR_FILTER_STRENGTH)
+            for entry in ccm["ccms"]:  # applied to camera RGB first, then the color matrix
+                entry["ccm"] = (np.reshape(entry["ccm"], (3, 3)) @ ir).ravel().tolist()
     return tuning
+
+
+def ir_matrix(strength: float) -> np.ndarray:
+    """
+    Camera-RGB correction for a sensor without an IR-cut filter (rows/columns in R, G, B order).
+
+    Near infrared adds mostly to red. The sensor's red dye passes everything above ~600 nm, but the green
+    and blue dyes only open up above ~800 nm. Surfaces reflect very different amounts of IR (skin,
+    fabrics, wood and plants reflect a lot), so even after white balancing on a gray card, those surfaces
+    come out too red.
+
+    A pixel can't tell infrared from red light, so this approximates: the red output is pulled toward
+    the green/blue average by strength (0 = no change, 1 = reds become gray). The rows sum to 1, so
+    neutral colors stay neutral and the white balance still holds; real reds lose some saturation too.
+    It runs in the ISP's linear color matrix: no per-frame cost, and the preview and photo match.
+    Only an optical IR-cut filter removes the IR completely.
+    """
+    s = min(1.0, max(0.0, float(strength)))
+    return np.array([[1 - s, s / 2, s / 2],
+                     [0.0, 1.0, 0.0],
+                     [0.0, 0.0, 1.0]])
 
 
 def flicker_period_us() -> float:
@@ -389,7 +419,10 @@ class UsbCamera:
         self.cap.release()
 
 
-def open_camera(backend: str, index: int, aspect: float):
+Camera = Union[PiCamera, UsbCamera]
+
+
+def open_camera(backend: str, index: int, aspect: float) -> Camera:
     if backend == "picam":
         return PiCamera(aspect)
     if backend == "usb":

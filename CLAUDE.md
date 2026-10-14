@@ -45,7 +45,7 @@ To check rendering speed or output without the camera, call `Exhibit(None, None)
 **Modules:**
 - `camera.py`: `PiCamera` and `UsbCamera` share one interface (`latest`, `bgra(raw)`, `photo()`, `status()`, `release()`); each keeps only the latest frame using a background thread.
   - `PiCamera` runs one picamera2 configuration with two YUV420 streams of every frame: `lores` (640 wide, preview + ROI) and `main` (1152 wide, copied only for a photo). It pins the full-view 1296×972 sensor mode, and the ISP crops the sensor to the template window's aspect (`ScalerCrop`) and mirrors it (`Transform`, software fallback).
-  - Everything is fixed: exposure, gain, white balance, frame rate and processing controls (`PICAM_*`), plus a NoIR tuning file patched to disable adaptive contrast (`ce_enable`) and adaptive lens shading (`alsc n_iter`), and an optional fixed color matrix (`PICAM_CCM`).
+  - Everything is fixed: exposure, gain, white balance, frame rate and processing controls (`PICAM_*`), plus a NoIR tuning file patched to disable adaptive contrast (`ce_enable`) and adaptive lens shading (`alsc n_iter`), an optional fixed color matrix (`PICAM_CCM`), and `IR_FILTER`: since there's no IR-cut filter, `ir_matrix` pulls red toward the green/blue average in front of the ISP's color matrix (neutrals unchanged, no per-frame cost).
 - `main.py`:
   - `Exhibit` holds the trigger → countdown → flash → capture sequence. `render()` takes the camera's BGRA frame (already mirrored) and returns it with overlays, its crop for the window, and the debug panel. It does no I/O.
 - `display.py`: `Display` owns the window and the GPU textures, draws one frame per `show()`, and handles q/Esc.

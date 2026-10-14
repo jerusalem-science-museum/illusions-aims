@@ -56,7 +56,7 @@ def check_tuning():
     if ccm:
         for entry in ccm.get("ccms", []):
             m = np.round(np.array(entry["ccm"]).reshape(3, 3), 3)
-            print(f"rpi.ccm at {entry['ct']} K:", m.tolist())
+            print(f"rpi.ccm at {entry['ct']} K (with IR_FILTER={cfg.IR_FILTER}):", m.tolist())
 
 
 def check_color(aspect: float):
