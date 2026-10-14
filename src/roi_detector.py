@@ -8,10 +8,13 @@ import constant as cfg
 
 
 def roi_rect(frame_w: int, frame_h: int) -> Tuple[int, int, int, int]:
-    """ROI as (x0, y0, x1, y1) in camera pixels, clamped to the frame."""
-    x0 = min(max(0, cfg.ROI_X), frame_w - 1)
-    y0 = min(max(0, cfg.ROI_Y), frame_h - 1)
-    return x0, y0, min(frame_w, x0 + max(1, cfg.ROI_W)), min(frame_h, y0 + max(1, cfg.ROI_H))
+    """ROI as (x0, y0, x1, y1) in pixels of a frame_w x frame_h camera frame, clamped to it.
+    ROI_* are fractions of the frame, so they survive a change of camera resolution."""
+    x0 = min(max(0, round(cfg.ROI_X * frame_w)), frame_w - 1)
+    y0 = min(max(0, round(cfg.ROI_Y * frame_h)), frame_h - 1)
+    x1 = min(frame_w, x0 + max(1, round(cfg.ROI_W * frame_w)))
+    y1 = min(frame_h, y0 + max(1, round(cfg.ROI_H * frame_h)))
+    return x0, y0, x1, y1
 
 
 def roi_patch(frame: np.ndarray, rect: Tuple[int, int, int, int]) -> np.ndarray:

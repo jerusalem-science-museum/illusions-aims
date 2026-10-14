@@ -12,10 +12,36 @@ PREVIEW_W = 1920              # Canvas size the template, window and QR slots ar
 PREVIEW_H = 1080              # scales it to the screen. It costs nothing per frame (the template is uploaded once)
 PHOTO_W = 1920                # Size the template is rendered at for the uploaded photo (before cropping to the frame)
 PHOTO_H = 1080
-PREVIEW_FPS = 25
+PREVIEW_FPS = 25              # Also the Pi camera's fixed frame rate
+CAM_BACKEND = "picam"         # "picam" = Raspberry Pi camera (picamera2), "usb" = webcam via OpenCV (--camera)
+MAINS_HZ = 50                 # Room lights flicker at twice this; fixed exposures should be multiples of 1/(2*MAINS_HZ)
+
+# --- Pi camera: OV5647 (Camera Module v1) without an IR-cut filter -------------------------------
+# One configuration, two YUV420 streams of every frame (see camera.py). Their heights follow the template
+# window's aspect, and the ISP crops the sensor to that aspect, so nothing captured is thrown away.
+PICAM_SENSOR_MODE = (1296, 972)  # Full field of view, 2x2 binned. Pinned: the 1920x1080 mode is a center crop
+PICAM_LORES_W = 640           # Preview + ROI width, every frame (multiple of 64: rows have no padding)
+PICAM_MAIN_W = 1152           # Photo width, only on capture; ~ the template window's width (1148 px)
+PICAM_ZOOM = 1.0              # >1 crops into the center of the view (done by the ISP, costs nothing)
+# NoIR tuning: calibrated for a sensor that also sees infrared, so colors are closer to right
+PICAM_TUNING_FILE = "ov5647_noir.json"
+# Fixed exposure, gain and white balance: nothing adapts to the scene, so only a visitor changes the ROI.
+# Run `python3 main.py --calibrate-camera` in the room's lighting and paste its values here.
+PICAM_EXPOSURE_US = 20000     # Multiple of 1e6 / (2 * MAINS_HZ) = 10000 us, and <= 1e6 / PREVIEW_FPS
+PICAM_ANALOGUE_GAIN = 2.0     # Keep low: the OV5647 is noisy (more light or exposure is better)
+PICAM_COLOUR_GAINS = (1.5, 1.5)  # (red, blue) white balance gains
+PICAM_SATURATION = 1.0        # Infrared washes colors out; >1 brings some back
+# Fixed 3x3 color matrix (camera RGB -> sRGB, rows sum to ~1), replacing the tuning file's, which varies
+# with color temperature. None = the tuning file's (fixed anyway, as the white balance is fixed).
+# Without an IR filter, a matrix with stronger negative off-diagonals than the tuning file's cancels some of
+# the infrared tint. picam_check.py prints the tuning file's matrix to start from; tune by eye on site.
+PICAM_CCM = None
+CAM_CALIBRATE_SETTLE_S = 3.0  # --calibrate-camera: let auto exposure settle this long
+
+# --- USB camera (--camera usb) ------------------------------------------------------------------
 CAMERA_RESOLUTION = (640, 480)
 CAM_INDEX = 0                 # Hardware camera index (0 is usually the USB webcam)
-CAM_BUFFERS = 4               # V4L2 capture buffers; 1 halves the frame rate on a Pi (see Camera)
+CAM_BUFFERS = 4               # V4L2 capture buffers; 1 halves the frame rate on a Pi (see UsbCamera)
 # Lock auto exposure / white balance / focus so scene changes don't shift the ROI color.
 CAM_LOCK_AUTO = False
 CAM_EXPOSURE = None           # Manual exposure (V4L2 units, see `v4l2-ctl -L`); None = freeze the value auto picked
@@ -77,11 +103,12 @@ FLASH_COLOR = "white"  # "white" or "black"
 # ---------------------------------------------------------
 # ROI TRIGGER (Region of Interest)
 # ---------------------------------------------------------
-# Box in camera pixels, on the mirrored image (as seen on screen)
-ROI_W = 40
-ROI_H = 40
-ROI_X = 480
-ROI_Y = 80
+# Box as fractions of the camera frame, on the mirrored image (as seen on screen). With the Pi camera the
+# frame is exactly the template window. Recalibrate on site after moving or changing the camera.
+ROI_X = 0.75
+ROI_Y = 0.17
+ROI_W = 0.0625
+ROI_H = 0.083
 
 BASELINE_SECONDS = 2.0        # Time to record the empty-ROI reference patch (and per-pixel noise) at startup
 PIXEL_DIFF_MIN = 25.0         # A pixel counts as changed when its largest channel difference exceeds

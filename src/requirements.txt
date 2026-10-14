@@ -1,5 +1,5 @@
-opencv-python
-numpy
+# On the Pi, numpy, OpenCV and picamera2 come from apt (setup.sh), not pip: pip's numpy 2.x breaks the
+# apt modules picamera2 uses. On a PC (USB camera only): pip install opencv-python numpy
 pyshorteners
 google-api-python-client
 pillow

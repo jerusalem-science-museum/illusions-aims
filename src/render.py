@@ -10,14 +10,6 @@ from log import get_logger
 
 log = get_logger()
 
-_FLIP_CODES = {"h": 1, "v": 0, "hv": -1}
-
-
-def flip(img: np.ndarray) -> np.ndarray:
-    code = _FLIP_CODES.get(cfg.FLIP_MODE.lower().strip())
-    return img if code is None else cv2.flip(img, code)
-
-
 class Template:
     """
     The RGBA template with a transparent picture window, loaded once at the screen size.

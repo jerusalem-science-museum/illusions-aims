@@ -54,6 +54,11 @@ sudo apt-get install -y \
     python3 \
     python3-venv \
     python3-pip \
+    python3-picamera2 \
+    python3-libcamera \
+    python3-numpy \
+    python3-opencv \
+    rpicam-apps \
     tmux \
     unclutter
     # Add any other apt packages your project needs, e.g.:
@@ -95,10 +100,16 @@ fi
 echo ""
 echo "[3/4] Setting up Python virtual environment..."
 
+# picamera2 / libcamera only come from apt, so the venv must see the system packages. numpy and OpenCV
+# come from apt too: pip's numpy 2.x breaks the apt modules picamera2 depends on.
+if [ -d "$VENV_DIR" ] && ! grep -q "include-system-site-packages = true" "$VENV_DIR/pyvenv.cfg"; then
+    echo "  Existing venv can't see system packages (picamera2); recreating it"
+    rm -rf "$VENV_DIR"
+fi
 if [ -d "$VENV_DIR" ]; then
     echo "  Venv already exists, skipping creation"
 else
-    python3 -m venv "$VENV_DIR"
+    python3 -m venv --system-site-packages "$VENV_DIR"
 fi
 "$VENV_DIR/bin/pip" install --upgrade pip
 

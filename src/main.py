@@ -3,8 +3,8 @@ Ames room exhibit: live camera inside a branded template, shown fullscreen on th
 Covering the ROI starts a countdown and flash, then the photo is uploaded to Google Drive
 and its QR code appears in the template's QR slots.
 
-Per frame, the CPU only works at camera resolution (flip, ROI, overlays). The GPU scales the
-camera image into the template's window and composites the template and QRs (see display.py).
+Per frame, the CPU only works at camera resolution (YUV conversion, ROI, overlays). The GPU scales
+the camera image into the template's window and composites the template and QRs (see display.py).
 """
 import argparse
 import datetime
@@ -20,9 +20,10 @@ import numpy as np
 
 import constant as cfg
 from log import get_logger
+from camera import calibrate, open_camera
 from display import Display
 from qr_queue import QRQueue
-from render import Template, draw_countdown, draw_roi, flash, flip, make_qr
+from render import Template, draw_countdown, draw_roi, flash, make_qr
 from roi_debug import ROIDebug
 from roi_detector import ROITriggerDetector, roi_patch, roi_rect
 from google_upload import DriveUploader, SheetsLogger, resolve_spreadsheet_id
@@ -30,92 +31,12 @@ from google_upload import DriveUploader, SheetsLogger, resolve_spreadsheet_id
 log = get_logger()
 
 
-class Camera:
-    """Reads the camera on a background thread and keeps only the latest frame."""
-
-    def __init__(self, index: int):
-        backend = cv2.CAP_V4L2 if hasattr(cv2, "CAP_V4L2") else cv2.CAP_ANY
-        self.cap = cv2.VideoCapture(index, backend)
-        if not self.cap.isOpened() and backend != cv2.CAP_ANY:
-            self.cap = cv2.VideoCapture(index, cv2.CAP_ANY)
-        if not self.cap.isOpened():
-            raise RuntimeError(f"Cannot open the camera on index {index}.")
-
-        # The reader thread drains the queue as fast as frames arrive, so extra buffers add no latency.
-        # With only 1, the driver has nowhere to put the next frame while the previous one is being
-        # decoded, and on a Pi that drops every other frame (30 -> 15 fps).
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, cfg.CAM_BUFFERS)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.CAMERA_RESOLUTION[0])
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.CAMERA_RESOLUTION[1])
-        self.cap.set(cv2.CAP_PROP_FPS, cfg.PREVIEW_FPS)  # last: V4L2 resets the frame rate when the size changes
-        fourcc = int(self.cap.get(cv2.CAP_PROP_FOURCC))
-        log.info("Camera opened: %dx%d @ %s fps, format %s",
-                 self.cap.get(cv2.CAP_PROP_FRAME_WIDTH), self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
-                 self.cap.get(cv2.CAP_PROP_FPS), fourcc.to_bytes(4, "little").decode("ascii", "replace"))
-        if cfg.CAM_LOCK_AUTO:
-            self._lock_auto()
-
-        # cap.read() returns a new array each time and nobody mutates it, so no copies are needed.
-        self.latest: Optional[np.ndarray] = None
-        self.frames = 0  # frames read so far, for the FPS log
-        self.running = True
-        self.thread = threading.Thread(target=self._reader, daemon=True)
-        self.thread.start()
-
-    def _lock_auto(self):
-        """Freezes exposure, gain, white balance and focus so scene changes can't trigger the ROI.
-
-        Auto exposure runs briefly first so the frozen value suits the room's lighting.
-        Support varies by camera and driver, so every step is best effort.
-        """
-        cap = self.cap
-        end = time.time() + cfg.CAM_LOCK_SETTLE_S
-        while time.time() < end:
-            cap.read()
-
-        exposure = cfg.CAM_EXPOSURE if cfg.CAM_EXPOSURE is not None else cap.get(cv2.CAP_PROP_EXPOSURE)
-        gain = cfg.CAM_GAIN if cfg.CAM_GAIN is not None else cap.get(cv2.CAP_PROP_GAIN)
-        wb = cap.get(cv2.CAP_PROP_WB_TEMPERATURE)
-
-        # V4L2 uses 1 for manual exposure, DirectShow uses 0.25.
-        manual = 1 if hasattr(cv2, "CAP_V4L2") and cap.getBackendName() == "V4L2" else 0.25
-        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, manual)
-        cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
-        cap.set(cv2.CAP_PROP_GAIN, gain)
-        cap.set(cv2.CAP_PROP_AUTO_WB, 0)
-        if wb > 0:
-            cap.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
-        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        log.info("Camera locked: auto_exposure=%s exposure=%s gain=%s wb=%s",
-                 cap.get(cv2.CAP_PROP_AUTO_EXPOSURE), cap.get(cv2.CAP_PROP_EXPOSURE),
-                 cap.get(cv2.CAP_PROP_GAIN), cap.get(cv2.CAP_PROP_WB_TEMPERATURE))
-
-    def _reader(self):
-        fails = 0
-        while self.running:
-            ok, frame = self.cap.read()
-            if ok:
-                fails = 0
-                self.latest = frame
-                self.frames += 1
-            else:
-                fails += 1
-                if fails in (1, 30, 120):
-                    log.warning("Camera read failed (%d). Retrying...", fails)
-                time.sleep(0.01)
-
-    def release(self):
-        self.running = False
-        self.thread.join(timeout=1)
-        self.cap.release()
-
-
 class Exhibit:
     """Rendering and the trigger → countdown → flash → capture sequence (no camera or display I/O)."""
 
     def __init__(self, drive: Optional[DriveUploader], sheets: Optional[SheetsLogger],
                  offline: bool = False, debug: bool = False):
+        self.camera = None  # set once opened; _capture takes the photo from it
         self.drive = drive
         self.sheets = sheets
         self.offline = offline  # save captures locally instead of uploading
@@ -135,9 +56,11 @@ class Exhibit:
 
     def render(self, frame: np.ndarray, now: float):
         """
-        Advance the sequence and prepare one screen frame from a raw camera frame.
-        Returns (video, crop, panel): the BGRA camera image with the overlays drawn on it, the
-        (x, y, w, h) part of it that fills the template window, and the --debug panel (or None).
+        Advance the sequence and prepare one screen frame.
+        frame: the camera's BGRA image (camera.bgra(): already mirrored, and a new array, since the
+        overlays are drawn on it).
+        Returns (video, crop, panel): frame with the overlays drawn on it, the (x, y, w, h) part of
+        it that fills the template window, and the --debug panel (or None).
         """
         flash_end = None
         if self.countdown_end is not None:
@@ -145,13 +68,12 @@ class Exhibit:
             if now >= flash_end:
                 self.countdown_end = flash_end = None
                 self.capturing = True
-                threading.Thread(target=self._capture, args=(frame,), daemon=True).start()
+                threading.Thread(target=self._capture, daemon=True).start()
 
         t0 = time.perf_counter()
-        view = flip(frame) if cfg.FLIP_PREVIEW else frame
-        rect = roi_rect(view.shape[1], view.shape[0])
+        rect = roi_rect(frame.shape[1], frame.shape[0])
         idle = self.countdown_end is None and not self.capturing
-        patch = roi_patch(view, rect)
+        patch = np.ascontiguousarray(roi_patch(frame, rect)[:, :, :3])  # BGR, as the detector expects
         ready, enabled, trigger = self.detector.update(patch, now, allow_trigger=idle)
         if self.debug:
             state = ("baseline" if not ready else "TRIGGER" if trigger else "armed" if enabled
@@ -164,7 +86,7 @@ class Exhibit:
             self.countdown_end = now + max(1, int(cfg.COUNTDOWN_SECONDS))
 
         t1 = time.perf_counter()
-        img = cv2.cvtColor(view, cv2.COLOR_BGR2BGRA)  # a new array, so the camera frame stays untouched
+        img = frame
         crop = self.template.crop(img.shape[1], img.shape[0])
         cx, cy, cw, ch = crop
         video = img[cy:cy + ch, cx:cx + cw]  # a view: drawing on it draws on img
@@ -189,13 +111,15 @@ class Exhibit:
             ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.sheets.append([ts, event, name, url, note])
 
-    def _capture(self, frame: np.ndarray):
+    def _capture(self):
         try:
             if self.drive is None and not self.offline:
                 log.error("Capture requested but Google Drive is not available.")
                 return
-            if cfg.FLIP_CAPTURE:
-                frame = flip(frame)
+            frame = self.camera.photo() if self.camera is not None else None
+            if frame is None:
+                log.error("Capture requested but the camera gave no photo frame.")
+                return
             ok, jpg = cv2.imencode(".jpg", self.photo_template.photo(frame))
             if not ok:
                 log.error("JPEG encoding failed.")
@@ -234,7 +158,8 @@ class Exhibit:
 
 
 class FPSLog:
-    """Logs the output and camera frame rates, the average render and display times, and the CPU temperature."""
+    """Logs the output and camera frame rates, the average render and display times, the camera's
+    exposure and gains (to confirm they stay fixed) and the CPU temperature."""
 
     def __init__(self, period: float):
         self.period = period
@@ -242,20 +167,22 @@ class FPSLog:
 
     def _reset(self, now: float, cam_frames: int):
         self.start, self.cam0 = now, cam_frames
-        self.n, self.render_s, self.write_s = 0, 0.0, 0.0
+        self.n, self.convert_s, self.render_s, self.write_s = 0, 0.0, 0.0, 0.0
 
-    def tick(self, render_s: float, write_s: float, cam_frames: int, stage_s=(0, 0), display_s=(0, 0, 0)) -> None:
+    def tick(self, convert_s: float, render_s: float, write_s: float, cam_frames: int, cam_status: str = "",
+             stage_s=(0, 0), display_s=(0, 0, 0)) -> None:
         self.n += 1
+        self.convert_s += convert_s
         self.render_s += render_s
         self.write_s += write_s
         now = time.monotonic()
         if self.period <= 0 or now - self.start < self.period:
             return
         span = now - self.start
-        log.info("FPS out %.1f (target %d), camera %.1f | render %.1f ms (detect %.1f, draw %.1f), display %.1f ms (upload %.1f, draw %.1f, present %.1f)%s",
-                 self.n / span, cfg.PREVIEW_FPS, (cam_frames - self.cam0) / span,
+        log.info("FPS out %.1f (target %d), camera %.1f | convert %.1f ms, render %.1f ms (detect %.1f, draw %.1f), display %.1f ms (upload %.1f, draw %.1f, present %.1f)%s%s",
+                 self.n / span, cfg.PREVIEW_FPS, (cam_frames - self.cam0) / span, 1000 * self.convert_s / self.n,
                  1000 * self.render_s / self.n, *(1000 * s / self.n for s in stage_s),
-                 1000 * self.write_s / self.n, *(1000 * s / self.n for s in display_s), _cpu_temp())
+                 1000 * self.write_s / self.n, *(1000 * s / self.n for s in display_s), cam_status, _cpu_temp())
         stage_s[:] = [0.0] * len(stage_s)
         display_s[:] = [0.0] * len(display_s)
         self._reset(now, cam_frames)
@@ -301,20 +228,29 @@ def parse_args():
     p.add_argument("--debug", action="store_true",
                    help="ROI stats panel, logs/roi_stats_*.csv and logs/roi_triggers/*.png")
     p.add_argument("--windowed", action="store_true", help="show in a window instead of fullscreen")
-    p.add_argument("--cam", type=int, default=cfg.CAM_INDEX, help=f"camera index (default {cfg.CAM_INDEX})")
+    p.add_argument("--camera", choices=("picam", "usb"), default=cfg.CAM_BACKEND,
+                   help=f"Raspberry Pi camera or USB webcam (default {cfg.CAM_BACKEND})")
+    p.add_argument("--cam", type=int, default=cfg.CAM_INDEX, help=f"USB camera index (default {cfg.CAM_INDEX})")
+    p.add_argument("--calibrate-camera", action="store_true",
+                   help="Pi camera: find the fixed exposure, gain and white balance for constant.py, then exit")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    # OpenCV splits some calls across its thread pool and waits for every worker. With the camera decode
-    # keeping the Pi's 4 cores busy, a worker is often descheduled and the whole call stalls.
+    # OpenCV splits some calls across its thread pool and waits for every worker. With other threads
+    # keeping the Pi's cores busy, a worker is often descheduled and the whole call stalls.
     cv2.setNumThreads(1)
+    if args.calibrate_camera:
+        bw, bh = Template(cfg.MOCKUP_PNG, cfg.PREVIEW_W, cfg.PREVIEW_H).win_size
+        calibrate(bw / bh)
+        return
     log.info("Starting%s%s. Press q or Esc to quit, or Ctrl+C here.",
              " OFFLINE" if args.offline else "", " with ROI debug" if args.debug else "")
     google = (None, None) if args.offline else init_google()
     exhibit = Exhibit(*google, offline=args.offline, debug=args.debug)
-    camera = Camera(args.cam)
+    bw, bh = exhibit.template.win_size
+    camera = exhibit.camera = open_camera(args.camera, args.cam, bw / bh)
     viewer = Display(exhibit.template, fullscreen=not args.windowed)
 
     running = True
@@ -332,17 +268,20 @@ def main():
     fps = FPSLog(cfg.FPS_LOG_SECONDS)
     try:
         while running:
-            frame = camera.latest
-            if frame is None:
+            raw = camera.latest
+            if raw is None:
                 time.sleep(0.01)
                 continue
             t0 = time.monotonic()
-            video, crop, panel = exhibit.render(frame, t0)
+            frame = camera.bgra(raw)
             t1 = time.monotonic()
+            video, crop, panel = exhibit.render(frame, t1)
+            t2 = time.monotonic()
             if not viewer.show(video, crop, exhibit.qr_queue.placements(), panel):
                 log.info("Window closed. Exiting.")
                 break
-            fps.tick(t1 - t0, time.monotonic() - t1, camera.frames, exhibit.stage_s, viewer.stage_s)
+            fps.tick(t1 - t0, t2 - t1, time.monotonic() - t2, camera.frames, camera.status(),
+                     exhibit.stage_s, viewer.stage_s)
             next_t += interval
             delay = next_t - time.monotonic()
             if delay > 0:
