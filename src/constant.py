@@ -27,13 +27,12 @@ PICAM_ZOOM = 1.0              # >1 crops into the center of the view (done by th
 # NoIR tuning: calibrated for a sensor that also sees infrared, so colors are closer to right
 PICAM_TUNING_FILE = "ov5647_noir.json"
 # Fixed exposure, gain and white balance: nothing adapts to the scene, so only a visitor changes the ROI.
-# Run `python3 main.py --calibrate-camera` in the room's lighting and paste its values here.
-# PICAM_EXPOSURE_US = 20000     # Multiple of 1e6 / (2 * MAINS_HZ) = 10000 us, and <= 1e6 / PREVIEW_FPS
-# PICAM_ANALOGUE_GAIN = 2.0     # Keep low: the OV5647 is noisy (more light or exposure is better)
-# PICAM_COLOUR_GAINS = (1.5, 1.5)  # (red, blue) white balance gains
-PICAM_EXPOSURE_US = 10000
-PICAM_ANALOGUE_GAIN = 2.11
-PICAM_COLOUR_GAINS = (0.969, 1.787)
+# `python3 main.py --calibrate-camera` measures them in the room's lighting and saves them to
+# PICAM_CALIBRATION_FILE, which overrides these three. These are only the defaults when there's no file.
+PICAM_EXPOSURE_US = 10000       # Multiple of 1e6 / (2 * MAINS_HZ) = 10000 us, and <= 1e6 / PREVIEW_FPS
+PICAM_ANALOGUE_GAIN = 2.11      # Keep low: the OV5647 is noisy (more light or exposure is better)
+PICAM_COLOUR_GAINS = (0.969, 1.787)  # (red, blue) white balance gains
+PICAM_CALIBRATION_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "camera_calibration.json")
 
 PICAM_SATURATION = 1.0        # Infrared washes colors out; >1 brings some back
 # Fixed 3x3 color matrix (camera RGB -> sRGB, rows sum to ~1), replacing the tuning file's, which varies

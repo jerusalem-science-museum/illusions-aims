@@ -30,7 +30,7 @@ python3 main.py
 
 `run_s.sh` is an alternative apt-based dependency installer and check. Its comments are in French.
 
-Pi camera tools: `python3 main.py --calibrate-camera` finds the fixed exposure, gain and white balance for `constant.py` in the room's lighting (white balance from a gray card, since AWB is fooled by infrared). `python3 picam_check.py` checks the tuning, the YUV conversion against the ISP's RGB, speed, and that nothing adapts to the scene.
+Pi camera tools: `python3 main.py --calibrate-camera` finds the fixed exposure, gain and white balance in the room's lighting (white balance from a gray card, since AWB is fooled by infrared) and saves them to `src/camera_calibration.json` (gitignored, per Pi). `PiCamera` loads that file at startup, and falls back to `PICAM_EXPOSURE_US`/`PICAM_ANALOGUE_GAIN`/`PICAM_COLOUR_GAINS` in `constant.py` if it's missing. `python3 picam_check.py` checks the tuning, the YUV conversion against the ISP's RGB, speed, and that nothing adapts to the scene.
 
 Runtime requirements: picamera2 from apt (the venv uses `--system-site-packages`; numpy and OpenCV also come from apt, since pip's numpy 2.x breaks picamera2), and for usable speed on the Pi, a GPU-capable SDL2 renderer (the `vc4-kms-v3d` driver; the app logs a warning when it falls back to software rendering). Python deps are in `requirements.txt` (the root and `src/` copies differ slightly; `setup.sh` installs from the one next to it). The app exits on q or Esc, when the window is closed, or on SIGINT/SIGTERM.
 

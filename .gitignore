@@ -4,3 +4,4 @@
 !**/keys/.keep
 **/__pycache__/
 **/logs/
+**/camera_calibration.json

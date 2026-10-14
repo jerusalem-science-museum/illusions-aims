@@ -15,8 +15,12 @@ Both streams are converted by yuv_to(), so the preview and the photo have identi
 
 Exposure, gain, white balance and color processing are fixed (see constant.py), so the image of an
 unchanged scene never changes and only a visitor can trigger the ROI. The tuning file is patched to
-turn off the two adaptive stages that remain when AE/AWB are off (see _tuning()).
+turn off the two adaptive stages that remain when AE/AWB are off (see _tuning()). Exposure, gain and
+white balance come from PICAM_CALIBRATION_FILE, written by calibrate(), when it exists.
 """
+import datetime
+import json
+import os
 import threading
 import time
 from typing import Optional, Union
@@ -119,6 +123,38 @@ def ir_matrix(strength: float) -> np.ndarray:
     return np.array([[1 - s, s / 2, s / 2],
                      [0.0, 1.0, 0.0],
                      [0.0, 0.0, 1.0]])
+
+
+def load_calibration():
+    """(exposure_us, gain, (red, blue) gains) from PICAM_CALIBRATION_FILE, or constant.py's if it's
+    missing or unreadable."""
+    default = (cfg.PICAM_EXPOSURE_US, cfg.PICAM_ANALOGUE_GAIN, tuple(cfg.PICAM_COLOUR_GAINS))
+    path = cfg.PICAM_CALIBRATION_FILE
+    try:
+        with open(path, encoding="utf-8") as f:
+            c = json.load(f)
+        r, b = c["colour_gains"]
+        values = (float(c["exposure_us"]), float(c["analogue_gain"]), (float(r), float(b)))
+    except FileNotFoundError:
+        log.warning("No camera calibration (%s); using constant.py's. Run main.py --calibrate-camera.", path)
+        return default
+    except Exception:
+        log.exception("Camera calibration %s is unreadable; using constant.py's.", path)
+        return default
+    log.info("Camera calibration from %s (%s): exposure %d us, gain %.2f, wb %.3f/%.3f",
+             path, c.get("date", "no date"), values[0], values[1], *values[2])
+    return values
+
+
+def save_calibration(exposure_us: float, gain: float, colour_gains) -> None:
+    path = cfg.PICAM_CALIBRATION_FILE
+    data = {"exposure_us": int(exposure_us), "analogue_gain": round(float(gain), 3),
+            "colour_gains": [round(float(g), 3) for g in colour_gains],
+            "date": datetime.datetime.now().isoformat(timespec="seconds")}
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)  # a power cut mid-write can't leave a half-written file
 
 
 def flicker_period_us() -> float:
@@ -244,7 +280,7 @@ class PiCamera:
                              # AE only picks exposures that are multiples of the flicker period
                              "AeFlickerMode": 1, "AeFlickerPeriod": int(flicker_period_us())})
         else:
-            controls.update(self.manual(cfg.PICAM_EXPOSURE_US, cfg.PICAM_ANALOGUE_GAIN, cfg.PICAM_COLOUR_GAINS))
+            controls.update(self.manual(*load_calibration()))
         return self._available(controls)
 
     @staticmethod
@@ -430,19 +466,112 @@ def open_camera(backend: str, index: int, aspect: float) -> Camera:
     raise ValueError(f"Unknown camera backend {backend!r} (use 'picam' or 'usb').")
 
 
+
+
+def _card_box(w: int, h: int):
+    """(x0, y0, x1, y1): the center fifth of the view, where the card is measured."""
+    return 2 * w // 5, 2 * h // 5, 3 * w // 5, 3 * h // 5
+
+
+def _card_mean(img: np.ndarray):
+    """Mean (B, G, R) of the card box."""
+    x0, y0, x1, y1 = _card_box(img.shape[1], img.shape[0])
+    return img[y0:y1, x0:x1, :3].reshape(-1, 3).mean(axis=0)
+
+
+class _CalibrationView:
+    """
+    Live view for --calibrate-camera: the camera image (mirrored, as in the exhibit) with the card box
+    and status lines, in a window scaled to fit the screen. Enter/Space continues, q/Esc cancels.
+    Without a display (e.g. over SSH with no DISPLAY), it falls back to the terminal.
+    """
+
+    def __init__(self, size):
+        self.screen = None
+        try:
+            os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+            import pygame
+            pygame.init()
+            info = pygame.display.Info()
+            w, h = size
+            s = min(1.0, 0.9 * info.current_w / w, 0.9 * info.current_h / h)
+            self.size = (round(w * s), round(h * s))
+            self.screen = pygame.display.set_mode(self.size)
+            pygame.display.set_caption("Camera calibration")
+            self.pg = pygame
+        except Exception as e:
+            log.warning("No preview window (%s); following in the terminal only.", e)
+
+    def show(self, img: np.ndarray, lines) -> Optional[str]:
+        """Draw img (BGRA; drawn on) with the card box and lines. Returns "enter", "quit" or None."""
+        if self.screen is None:
+            return None
+        pg = self.pg
+        h, w = img.shape[:2]
+        x0, y0, x1, y1 = _card_box(w, h)
+        cv2.rectangle(img, (x0, y0), (x1, y1), (0, 255, 0, 255), 3)
+        scale = max(0.6, w / 1400)
+        for i, line in enumerate(lines):
+            org = (12, round((i + 1) * 40 * scale))
+            cv2.putText(img, line, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0, 255), 5, cv2.LINE_AA)
+            cv2.putText(img, line, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255, 255), 2, cv2.LINE_AA)
+        surf = pg.image.frombuffer(img, (w, h), "BGRA")
+        self.screen.blit(surf if self.size == (w, h) else pg.transform.smoothscale(surf, self.size), (0, 0))
+        pg.display.flip()
+        for e in pg.event.get():
+            if e.type == pg.QUIT or (e.type == pg.KEYDOWN and e.key in (pg.K_q, pg.K_ESCAPE)):
+                return "quit"
+            if e.type == pg.KEYDOWN and e.key in (pg.K_RETURN, pg.K_KP_ENTER, pg.K_SPACE):
+                return "enter"
+        return None
+
+    def live(self, cam: "PiCamera", lines, seconds: Optional[float] = None) -> Optional[str]:
+        """
+        Show the camera live until Enter or cancel, or for seconds if given (Enter is then ignored).
+        lines(card_bgr) gives the text lines for the current card box mean.
+        Returns "enter", "quit" or None (time up).
+        """
+        if self.screen is None:  # terminal fallback
+            if seconds is not None:
+                time.sleep(seconds)
+                return None
+            print("\n".join(lines(None)))
+            input("Press Enter to measure...")
+            return "enter"
+        end = None if seconds is None else time.monotonic() + seconds
+        while end is None or time.monotonic() < end:
+            raw = cam.latest
+            if raw is not None:
+                img = cam.bgra(raw)
+                key = self.show(img, lines(_card_mean(img)))
+                if key == "quit" or (key == "enter" and seconds is None):
+                    return key
+            time.sleep(0.04)
+        return None
+
+    def close(self):
+        if self.screen is not None:
+            self.pg.quit()
+
+
 def calibrate(aspect: float) -> None:
     """
-    --calibrate-camera: find the fixed settings for constant.py, in the room's real lighting.
-      1. Auto exposure settles (only flicker-safe exposures), then exposure and gain are frozen
-         (exposure rounded to a multiple of the flicker period, gain compensating).
-      2. White balance on a gray/white card held over the center of the view: the red/blue gains are
-         adjusted until the card is neutral. Done on the card rather than by AWB, because without
-         an IR-cut filter AWB is fooled by the infrared.
+    --calibrate-camera: find the fixed settings in the room's real lighting and save them to
+    PICAM_CALIBRATION_FILE (see load_calibration()). A live view shows each step (_CalibrationView).
+      1. Auto exposure settles on the normal scene (only flicker-safe exposures), then exposure and gain
+         are frozen (exposure rounded to a multiple of the flicker period, gain compensating).
+      2. White balance on a gray/white card covering the box in the center of the view: the red/blue
+         gains are adjusted until the card is neutral. Done on the card rather than by AWB, because
+         without an IR-cut filter AWB is fooled by the infrared.
     """
     cam = PiCamera(aspect, auto=True)
+    view = _CalibrationView(cam.lores_size)
     try:
         log.info("Calibration: letting auto exposure settle for %.0f s...", cfg.CAM_CALIBRATE_SETTLE_S)
-        time.sleep(cfg.CAM_CALIBRATE_SETTLE_S)
+        if view.live(cam, lambda card: ["Auto exposure settling: show the normal scene, no card yet",
+                                        "Esc = cancel"], cfg.CAM_CALIBRATE_SETTLE_S) == "quit":
+            log.info("Calibration cancelled; nothing saved.")
+            return
         md = cam.metadata
         exp, gain = md["ExposureTime"], md["AnalogueGain"] * md.get("DigitalGain", 1.0)
         period = flicker_period_us()
@@ -459,28 +588,38 @@ def calibrate(aspect: float) -> None:
                  exp, md["AnalogueGain"], r, b, fixed_exp, gain)
         cam.set_controls(PiCamera.manual(fixed_exp, gain, (r, b)))
 
-        input("Hold a gray or white card (matte paper works) so it fills the center of the view, "
-              "then press Enter...")
+        def card_lines(card):
+            lines = ["Hold a gray or white card (matte paper works) over the whole green box",
+                     "Enter = measure, Esc = cancel"]
+            if card is not None:
+                lines.append("box BGR %.0f %.0f %.0f%s" % (*card, "  CLIPPED: too bright" if max(card) >= 250 else ""))
+            return lines
+
+        if view.live(cam, card_lines) == "quit":
+            log.info("Calibration cancelled; nothing saved.")
+            return
         for _ in range(12):
-            time.sleep(0.5)  # new controls take a few frames to reach the output
-            img = cam.bgra(cam.latest)
-            h, w = img.shape[:2]
-            patch = img[2 * h // 5:3 * h // 5, 2 * w // 5:3 * w // 5, :3]
-            mb, mg, mr = patch.reshape(-1, 3).mean(axis=0)
+            # New controls take a few frames to reach the output
+            if view.live(cam, lambda card: ["Measuring: keep the card over the box",
+                                            "wb %.3f / %.3f" % (r, b)], 0.5) == "quit":
+                log.info("Calibration cancelled; nothing saved.")
+                return
+            mb, mg, mr = _card_mean(cam.bgra(cam.latest))
             log.info("Card BGR %.0f %.0f %.0f, gains %.3f/%.3f", mb, mg, mr, r, b)
             if max(mb, mg, mr) >= 250:
-                log.warning("The card is clipped (too bright); lower the light or PICAM_EXPOSURE_US after.")
+                log.warning("The card is clipped (too bright); dim the light on it and calibrate again.")
             if min(mb, mg, mr) < 5:
-                log.error("The card is too dark to measure.")
-                break
+                log.error("The card is too dark to measure; calibration not saved.")
+                return
             if abs(mg / mr - 1) < 0.01 and abs(mg / mb - 1) < 0.01:
                 break
             r = min(8.0, max(0.3, r * mg / mr))
             b = min(8.0, max(0.3, b * mg / mb))
             cam.set_controls({"ColourGains": (r, b)})
 
-        text = ("PICAM_EXPOSURE_US = %d\nPICAM_ANALOGUE_GAIN = %.2f\nPICAM_COLOUR_GAINS = (%.3f, %.3f)"
-                % (fixed_exp, gain, r, b))
-        log.info("Calibration done. Put these in constant.py:\n%s", text)
+        save_calibration(fixed_exp, gain, (r, b))
+        log.info("Calibration done: exposure %d us, gain %.2f, wb %.3f/%.3f. Saved to %s; "
+                 "the exhibit uses it from its next start.", fixed_exp, gain, r, b, cfg.PICAM_CALIBRATION_FILE)
     finally:
+        view.close()
         cam.release()
