@@ -1,0 +1,51 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Exhibit: offline + debug (windowed)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "cwd": "${workspaceFolder}/src",
+            "console": "integratedTerminal",
+            "args": ["--offline", "--debug", "--windowed", "--cam", "${input:cam}"]
+        },
+        {
+            "name": "Exhibit: offline",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "cwd": "${workspaceFolder}/src",
+            "console": "integratedTerminal",
+            "args": ["--offline", "--windowed", "--cam", "${input:cam}"]
+        },
+        {
+            "name": "Exhibit: online + debug (Google upload)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "cwd": "${workspaceFolder}/src",
+            "console": "integratedTerminal",
+            "args": ["--debug", "--windowed", "--cam", "${input:cam}"]
+        },
+        {
+            "name": "Python Debugger: Current File with Arguments",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": "${command:pickArgs}"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "cam",
+            "type": "promptString",
+            "description": "Camera index",
+            "default": "2"
+        }
+    ]
+}

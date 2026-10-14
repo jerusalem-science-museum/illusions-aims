@@ -244,7 +244,7 @@ class FPSLog:
         self.start, self.cam0 = now, cam_frames
         self.n, self.render_s, self.write_s = 0, 0.0, 0.0
 
-    def tick(self, render_s: float, write_s: float, cam_frames: int, stage_s=(0, 0)) -> None:
+    def tick(self, render_s: float, write_s: float, cam_frames: int, stage_s=(0, 0), display_s=(0, 0, 0)) -> None:
         self.n += 1
         self.render_s += render_s
         self.write_s += write_s
@@ -252,11 +252,12 @@ class FPSLog:
         if self.period <= 0 or now - self.start < self.period:
             return
         span = now - self.start
-        log.info("FPS out %.1f (target %d), camera %.1f | render %.1f ms (detect %.1f, draw %.1f), display %.1f ms%s",
+        log.info("FPS out %.1f (target %d), camera %.1f | render %.1f ms (detect %.1f, draw %.1f), display %.1f ms (upload %.1f, draw %.1f, present %.1f)%s",
                  self.n / span, cfg.PREVIEW_FPS, (cam_frames - self.cam0) / span,
                  1000 * self.render_s / self.n, *(1000 * s / self.n for s in stage_s),
-                 1000 * self.write_s / self.n, _cpu_temp())
+                 1000 * self.write_s / self.n, *(1000 * s / self.n for s in display_s), _cpu_temp())
         stage_s[:] = [0.0] * len(stage_s)
+        display_s[:] = [0.0] * len(display_s)
         self._reset(now, cam_frames)
 
 
@@ -341,7 +342,7 @@ def main():
             if not viewer.show(video, crop, exhibit.qr_queue.placements(), panel):
                 log.info("Window closed. Exiting.")
                 break
-            fps.tick(t1 - t0, time.monotonic() - t1, camera.frames, exhibit.stage_s)
+            fps.tick(t1 - t0, time.monotonic() - t1, camera.frames, exhibit.stage_s, viewer.stage_s)
             next_t += interval
             delay = next_t - time.monotonic()
             if delay > 0:

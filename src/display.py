@@ -9,6 +9,7 @@ Uploads are BGRA, which SDL calls ARGB8888 (its default texture format on little
 so the bytes are copied as is with no conversion.
 """
 import os
+import time
 from typing import Optional
 
 import cv2
@@ -49,6 +50,7 @@ class Display:
         self._video: Optional[Texture] = None
         self._panel: Optional[Texture] = None
         self._qrs = {}  # id(qr image) -> (image, texture); the image is kept so its id stays unique
+        self.stage_s = [0.0] * 3  # time spent in upload / draw / present, summed since the last FPS log
         log.info("Display ready: %dx%d canvas, %s.", w, h, "fullscreen" if fullscreen else "windowed")
 
     @staticmethod
@@ -71,12 +73,15 @@ class Display:
                 return False
 
         r = self.renderer
-        r.draw_color = (0, 0, 0, 255)
-        r.clear()
+        t0 = time.perf_counter()
         self._video = self._streaming(self._video, r, video)
-        self._video.draw(srcrect=pygame.Rect(crop), dstrect=self.win)
         if panel is not None:
             self._panel = self._streaming(self._panel, r, panel)
+        t1 = time.perf_counter()
+        r.draw_color = (0, 0, 0, 255)
+        r.clear()
+        self._video.draw(srcrect=pygame.Rect(crop), dstrect=self.win)
+        if panel is not None:
             self._panel.draw(dstrect=(self.win.x, self.win.y))
         self.template.draw()
 
@@ -90,7 +95,11 @@ class Display:
             entry[1].draw(dstrect=(x, y, size, size))
         self._qrs = live  # textures of QRs that left the queue are freed
 
+        t2 = time.perf_counter()
         r.present()
+        t3 = time.perf_counter()
+        for i, d in enumerate((t1 - t0, t2 - t1, t3 - t2)):
+            self.stage_s[i] += d
         return True
 
     def close(self):
