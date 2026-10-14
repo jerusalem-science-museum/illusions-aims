@@ -20,7 +20,8 @@ MAINS_HZ = 50                 # Room lights flicker at twice this; fixed exposur
 # One configuration, two YUV420 streams of every frame (see camera.py). Their heights follow the template
 # window's aspect, and the ISP crops the sensor to that aspect, so nothing captured is thrown away.
 PICAM_SENSOR_MODE = (1296, 972)  # Full field of view, 2x2 binned. Pinned: the 1920x1080 mode is a center crop
-PICAM_LORES_W = 640           # Preview + ROI width, every frame (multiple of 64: rows have no padding)
+PICAM_LORES_W = 1152          # Preview + ROI width, every frame (multiple of 64: rows have no padding; <= main
+                              # on a Pi 4). ~ the template window's width (1150 px), so the preview isn't upscaled
 PICAM_MAIN_W = 1152           # Photo width, only on capture; ~ the template window's width (1148 px)
 PICAM_ZOOM = 1.0              # >1 crops into the center of the view (done by the ISP, costs nothing)
 # NoIR tuning: calibrated for a sensor that also sees infrared, so colors are closer to right
